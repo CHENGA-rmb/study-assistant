@@ -2,11 +2,10 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<link rel="icon" href="icon.png">
+<link rel="icon" href="studybodycomputer.png">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<link rel="apple-touch-icon" href="studybodycomputer.png">
 <title>学习助手</title>
 <style>
 *{box-sizing:border-box}
@@ -468,6 +467,18 @@ function renderHome(){
 
 /* ================= 打卡系统 ================= */
 const CHECK_TASKS=['记忆卡片（早 7:20）','校车学习（16:10）','学校作业按时完成','晚间 Block1 / Office 复盘','晚间 Block2 / 第二科目','睡前阅读（21:30）','手机 19:30 前放客厅'];
+const SUBJECT_GUIDE={
+'文学（文本细读）':'细读 1 篇短文：标注修辞、人物语气、主题句，不懂的记下来问 AI',
+'数学（错题+手感）':'错题本重做 3-5 题 + 少量同类型新题',
+'经济 office 复盘':'整理今天 office 的笔记与问答，没问透的记下来',
+'经济（细节错题）':'错题按主题归类，拍照发 AI 总结 checklist',
+'文学复盘（轻）':'快速回顾本周读过的文本要点',
+'语言（语法点+积累）':'错题语法点逐个搜索搞懂 + 10 个新单词',
+'经济（FRQ专项）':'限时写 1 道 FRQ，拍照发 AI 分析细节',
+'历史（TEA练SAQ）':'写 1 篇完整 SAQ（Thesis-Evidence-Analysis），拍照发 AI 批改',
+'语言（错题+词汇）':'清本周错题 + 复习 Quizlet 收藏夹',
+'生物（错题+预习）':'错题重做 + 预习明天内容'
+};
 function getCheckins(){return store.get('checkins',{});}
 function checkedCount(dateISO){const c=getCheckins();return Object.keys(c[dateISO]||{}).length;}
 function streakDays(){
@@ -486,9 +497,28 @@ function weekPct(){
 function renderCheckin(){
   const el=$('#sec-checkin');
   const c=getCheckins();const today=c[todayISO()]||{};
+  const day=new Date().getDay();
+  const rot=ROTATION[day];
+  const items=todayScheduleItems();
+  const b1=items.find(it=>/Block1|Office 复盘/.test(it.title));
+  const b2=items.find(it=>/Block2|第二科目/.test(it.title));
+  function taskInfo(i){
+    if(i===3&&b1&&rot&&rot[0]){
+      const p=b1.title.split(' · ');
+      return{t:'晚间 Block1 · '+(p.length>1?p[1]:b1.title),g:SUBJECT_GUIDE[rot[0]]||''};
+    }
+    if(i===4&&b2&&rot&&rot[1]){
+      const p=b2.title.split(' · ');
+      return{t:'晚间 Block2 · '+(p.length>1?p[1]:b2.title),g:SUBJECT_GUIDE[rot[1]]||''};
+    }
+    return{t:CHECK_TASKS[i],g:''};
+  }
   const taskRows=CHECK_TASKS.map(function(t,i){
     const on=today[i]?'checked':'';
-    return '<div class="debtRow"><label class="chk"><input type="checkbox" class="taskChk" data-idx="'+i+'" '+on+'><span></span></label><div class="grow" style="font-size:16px">'+esc(t)+'</div></div>';
+    const info=taskInfo(i);
+    return '<div class="debtRow"><label class="chk"><input type="checkbox" class="taskChk" data-idx="'+i+'" '+on+'><span></span></label><div class="grow" style="font-size:16px">'+esc(info.t)
+      +(info.g?'<div class="muted" style="font-size:13px;margin-top:2px">'+esc(info.g)+'</div>':'')
+      +'</div></div>';
   }).join('');
   const now=new Date();const dow=now.getDay()||7;
   const mon=new Date(now);mon.setDate(now.getDate()-dow+1);

@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <link rel="icon" href="studybodycomputer.png">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>学习助手</title>
 <style>
 *{box-sizing:border-box}
@@ -15,7 +15,7 @@
 --line2:#3a3a3a;--gray:#1a1a1a;--white:#fafafa;
 }
 html{-webkit-text-size-adjust:100%}
-body{margin:0;background:linear-gradient(180deg,#000 0%,#0a0a0a 100%);background-attachment:fixed;color:var(--text);font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:16px;line-height:1.6}
+body{margin:0;padding-top:env(safe-area-inset-top,0px);background:linear-gradient(180deg,#000 0%,#0a0a0a 100%);background-attachment:fixed;color:var(--text);font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;font-size:16px;line-height:1.6}
 h1{font-size:22px;margin:0 0 6px}
 h2{font-size:19px;margin:0 0 8px}
 h3{font-size:16px;margin:12px 0 6px}
@@ -153,6 +153,9 @@ main{padding-bottom:120px}
 .stepRow{display:flex;align-items:center;gap:10px;padding:6px 0 6px 12px;border-left:2px solid var(--line2);margin-left:6px}
 .taskTxt.doneT{text-decoration:line-through;opacity:.5}
 .hintStrip{background:var(--white);color:#0a0a0a;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:700;margin-bottom:10px}
+.accHd{width:100%;background:transparent;border:none;color:var(--text);text-align:left;font-size:17px;font-weight:800;padding:12px 8px;min-height:52px;cursor:pointer;font-family:inherit}
+.accBody{max-height:0;overflow:hidden;transition:max-height .3s ease;padding:0 6px}
+.accBody.open{max-height:4000px}
 #timerCap{position:fixed;right:14px;bottom:70px;z-index:120;background:var(--white);color:#0a0a0a;border-radius:999px;padding:10px 18px;font-weight:800;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.5);display:none;align-items:center;gap:10px;font-size:15px;max-width:70vw}
 #capTask{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40vw}
 </style>
@@ -223,7 +226,7 @@ document.addEventListener('keydown',e=>{
     const v=e.target.value.trim();
     if(!v)return;
     const t=getTasks();
-    t.push({id:Date.now(),text:v,done:false,steps:null,open:false});
+    t.push({id:Date.now(),text:v,done:false,steps:null,open:false,src:'用户输入'});
     saveTasks(t);refreshTaskCards();
   }
 });
@@ -389,16 +392,22 @@ function streakDays(){
   while(checkedCount(isoOf(d))>0){s++;d.setDate(d.getDate()-1);}
   return s;
 }
-/* 每日任务真实数据：任务快照（lsa_tasklog）+ 固定项勾选 */
-function dayTaskMap(iso){
-  const log=store.get('tasklog',{});
-  const map=Object.assign({},log[iso]||{});
-  const c=getCheckins()[iso]||{};
-  getFixedItems().forEach(function(t,idx){if(!(t in map))map[t]=!!c[idx];});
-  return map;
-}
+/* 完成率口径：历史日=日切冻结快照（不再重算）；当日=实时任务+固定项 */
 function dayRate(iso){
-  const m=dayTaskMap(iso);const keys=Object.keys(m);
+  if(iso<todayISO()){
+    const rec=(store.get('taskday',{})||{})[iso];
+    if(!rec)return null;
+    const t=(rec.tasks||[]).filter(function(x){return !x.cancelled;});
+    const f=rec.fixed||[];
+    const total=t.length+f.length;
+    if(!total)return null;
+    return{done:t.filter(function(x){return x.done;}).length+f.filter(function(x){return x.done;}).length,total:total};
+  }
+  const m={};
+  getTasks().forEach(function(t){if(!t.cancelled)m[t.text]=!!t.done;});
+  const c=getCheckins()[iso]||{};
+  getFixedItems().forEach(function(t,idx){if(!(t in m))m[t]=!!c[idx];});
+  const keys=Object.keys(m);
   if(!keys.length)return null;
   return{done:keys.filter(function(k){return m[k];}).length,total:keys.length};
 }
@@ -444,7 +453,8 @@ function renderCheckin(){
   const myTasks=getTasks();
   const dynRows=myTasks.length?myTasks.map(function(t){
     const on=ctc[t.id]?'checked':'';
-    return '<div class="debtRow"><label class="chk"><input type="checkbox" class="ctChk" data-id="'+t.id+'" '+on+'><span></span></label><div class="grow" style="font-size:16px">'+esc(t.text)+' <span class="tag">'+esc(quadOf[t.text]||'○')+'</span></div></div>';
+    const ctag=t.cancelled?' <span class="tag">已取消</span>':'';
+    return '<div class="debtRow'+(t.cancelled?' done':'')+'"><label class="chk"><input type="checkbox" class="ctChk" data-id="'+t.id+'" '+on+' '+(t.cancelled?'disabled':'')+'><span></span></label><div class="grow" style="font-size:16px'+(t.cancelled?';text-decoration:line-through;opacity:.5':'')+'">'+esc(t.text)+ctag+' <span class="tag">'+esc(quadOf[t.text]||'○')+'</span></div></div>';
   }).join(''):'<p class="muted">暂无任务，去今日页添加或让 AI 排程</p>';
   const now=new Date();const dow=now.getDay()||7;
   const mon=new Date(now);mon.setDate(now.getDate()-dow+1);
@@ -490,68 +500,165 @@ function renderDebt(){
 
 /* ================= 题库数据（英文题干 + 双语答案解析） ================= */
 const BANK={
-'历史 Unit3（Trade）':[
-{q:'Silk Road',a:'Overland trade routes linking East Asia and the Mediterranean / 丝绸之路',exp:'Silk, porcelain and papermaking spread west along these routes, together with religions and ideas. / 丝绸、瓷器、造纸术沿此西传，也带动宗教与思想交流。'},
-{q:'Indian Ocean trade',a:'A maritime trade network across the Indian Ocean / 印度洋贸易',exp:'It connected East Africa, India, Southeast Asia and China using monsoon winds and dhows. / 依靠季风与三角帆船（dhow），连接东非、印度、东南亚与中国。'},
-{q:'Trans-Saharan trade',a:'Camel-caravan trade across the Sahara / 跨撒哈拉贸易',exp:'It linked West Africa and North Africa, centered on gold-for-salt. / 以骆驼商队联通西非与北非，核心是黄金换盐。'},
-{q:'Monsoon winds',a:'Seasonally reversing winds over the Indian Ocean / 季风',exp:'Their regular reversal enabled scheduled long-distance ocean voyages. / 风向随季节规律反转，使定期跨洋航行成为可能。'},
-{q:'Dhow',a:'A lateen-rigged sailing ship of the Indian Ocean / 三角帆船',exp:'Its triangular sails made it agile in monsoon conditions. / 三角帆灵活利用季风，是印度洋贸易的典型船只。'},
-{q:'Caravanserai',a:'Roadside inns for merchant caravans / 商队驿站',exp:'They provided lodging and supplies along the Silk Road, lowering the risk of long overland trips. / 丝绸之路沿途供商队住宿补给，降低长途陆运风险。'},
-{q:'Bills of exchange',a:'Credit notes between medieval merchants / 汇票',exp:'They removed the need to carry cash over dangerous long distances. / 免去长途携带现金的风险，促进远程贸易结算。'},
-{q:'Guilds',a:'Medieval associations of craftsmen and merchants / 行会',exp:'They controlled quality, prices and apprenticeship in towns. / 控制质量、价格与学徒制度，规范手工业与商业。'},
-{q:'Gold-salt trade',a:'Trade exchanging West African gold for Saharan salt / 黄金换盐贸易',exp:'It was the core commodity structure of Trans-Saharan commerce. / 跨撒哈拉贸易的核心商品结构：西非产金、撒哈拉产盐。'},
-{q:'Buddhism spread',a:'The spread of Buddhism along trade routes / 佛教传播',exp:'A classic case of cultural diffusion driven by trade, reaching Central, East and Southeast Asia. / 贸易驱动文化扩散的典型，沿丝路传入中亚、中国与东亚。'},
-{q:'Contextualization template',a:'Open with “This is part of the larger trend of ___ during ___.” / 第一句写“这是发生在___时期的___大趋势的一部分”',exp:'Example: part of the expansion of Indian Ocean maritime trade during 1200-1450. / 例：这是发生在 1200-1450 年间印度洋海上贸易大发展的一部分。'},
-{q:'SAQ 1: Describe one technological development that facilitated trade (1200-1450) and explain how it changed trade patterns.',a:'Example: the compass / astrolabe improved navigation / 示例：指南针 / 星盘改进导航',exp:'Point: better navigation made direct ocean voyages safer, expanding Indian Ocean trade and port cities like Kilwa and Calicut. / 要点：导航更可靠→远洋直航增加→印度洋贸易量扩大，基尔瓦、卡利卡特等港口兴起。'},
-{q:'SAQ 2: Identify one example of cultural diffusion from trade and explain its long-term significance.',a:'Example: Buddhism spread into China along the Silk Road / 示例：佛教沿丝绸之路传入中国',exp:'Point: it was localized into Chinese Buddhism, shaping East Asian thought, art and architecture for centuries. / 要点：融入本土形成汉传佛教，长期影响东亚思想、艺术与建筑。'},
-{q:'SAQ 3: Briefly describe the broader historical context for the expansion of Indian Ocean trade.',a:'Example: better shipbuilding + expanding merchant networks + rising demand / 示例：造船航海技术进步＋商人网络扩张＋商品需求增长',exp:'Points: Tang-Song shipbuilding advances; Islamic empire and Indian/Arab merchant networks; growing demand for spices, silk and porcelain. / 要点：唐宋造船与航海技术；伊斯兰帝国与印度、阿拉伯商人网络；对香料、丝绸、瓷器的需求上升。'}
-],
-'生物 Unit2（细胞膜与运输）':[
-{q:'How does oxygen cross the cell membrane?',a:'Simple diffusion / 简单扩散',exp:'O₂ is small and nonpolar, so it passes directly through the phospholipid bilayer down its gradient — no ATP needed. / O₂ 分子小且非极性，直接穿过磷脂双分子层，顺浓度梯度，不耗 ATP。'},
-{q:'What happens to an animal cell in a hypertonic solution?',a:'It shrinks (crenation) / 皱缩',exp:'Water flows out by osmosis, so the cell loses water and shrinks. / 外界浓度高，水经渗透外流，细胞失水皱缩。'},
-{q:'Does facilitated diffusion require ATP?',a:'No — it only needs channel or carrier proteins / 不需要，只需通道蛋白（或载体蛋白）',exp:'It moves down the concentration gradient and is a form of passive transport. / 顺浓度梯度运输，属于被动运输。'},
-{q:'What powers the Na+/K+ pump to move ions against their gradients?',a:'ATP / ATP 供能',exp:'Active transport: hydrolyzing ATP pumps out 3 Na+ and pumps in 2 K+ per cycle. / 主动运输：水解 ATP，每循环泵出 3 个 Na+、泵入 2 个 K+。'},
-{q:'What happens to a red blood cell in distilled water?',a:'It swells and bursts (hemolysis) / 膨胀破裂（溶血）',exp:'Distilled water is hypotonic, so water rushes in until the cell bursts. / 蒸馏水是低渗溶液，水大量流入，红细胞吸水涨破。'}
-],
-'数学（Function）':[
-{q:'f(x)=3x+1. Find f(4) and f(a-1).',a:'13 and 3a-2 / 13 和 3a-2',exp:'f(4)=3×4+1=13; f(a-1)=3(a-1)+1=3a-2. / f(4)=13；f(a-1)=3(a-1)+1=3a-2。'},
-{q:'f(x)=x²-2x. Find f(3)-f(1).',a:'4 / 4',exp:'f(3)=9-6=3, f(1)=1-2=-1, so 3-(-1)=4. / f(3)=3，f(1)=-1，差为 4。'},
-{q:'Is (2,3)(4,5)(2,7) a function?',a:'No — x=2 has two outputs / 不是，x=2 有两个输出',exp:'A function must map each input to exactly one output. / 函数要求每个输入只对应唯一输出。'},
-{q:'Domain of f(x)=1/(x-2)?',a:'x≠2 / x≠2',exp:'The denominator cannot be zero, so x-2≠0. / 分母不能为 0，即 x-2≠0。'},
-{q:'Slope of the line through (1,2) and (5,10)?',a:'2 / 2',exp:'k=(10-2)/(5-1)=8/4=2. / 斜率 k=(10-2)/(5-1)=2。'}
-],
-'经济 Unit3（Cost & Profit）':[
-{q:'Formula check: TC / ATC / AVC / AFC / MC / MP?',a:'TC=FC+VC; ATC=TC/Q; AVC=VC/Q; AFC=FC/Q; MC=ΔTC/ΔQ; MP=ΔTP/ΔL / 公式：TC=FC+VC；ATC=TC/Q；AVC=VC/Q；AFC=FC/Q；MC=ΔTC/ΔQ；MP=ΔTP/ΔL',exp:'Checklist: use changes for MC/MP; use current Q in ATC; MC crosses ATC and AVC at their minimums; AFC always falls; economic profit subtracts implicit costs. / Checklist：MC/MP 用变化量计算；ATC 分母用当前 Q；MC 穿过 ATC 与 AVC 最低点；AFC 一直下降；经济利润要扣隐性成本。'},
-{q:'The 4th worker raises total product from 90 to 105. MP=?',a:'15 / 15',exp:'MP=ΔTP/ΔL=105-90=15. / MP=105-90=15。'},
-{q:'TC is 200 at Q=10 and 215 at Q=11. MC=? If FC=50, ATC≈?',a:'MC=15; ATC≈19.5 / MC=15；ATC≈19.5',exp:'MC=215-200=15; ATC uses the new Q: 215/11≈19.5. / MC=15；ATC 用新产量 Q=11：215/11≈19.5。'},
-{q:'Does FC rise as output rises?',a:'No / 错（不会）',exp:'Fixed costs do not change with output (rent, equipment). / 固定成本不随产量变化，如租金、设备。'},
-{q:'When MC<ATC, ATC is ___?',a:'Falling / 下降',exp:'Marginal cost pulls the average down; when MC>ATC, ATC rises; MC crosses ATC at its minimum. / MC 拉低平均成本；MC>ATC 时 ATC 上升；MC 穿过 ATC 最低点。'},
-{q:'Revenue 100k, explicit costs 60k, implicit costs 30k. Accounting profit and economic profit?',a:'Accounting profit 40k; economic profit 10k / 会计利润 4 万，经济利润 1 万',exp:'Accounting profit = revenue − explicit = 40k; economic profit = revenue − all costs = 10k. / 会计利润=收入-显性成本=4 万；经济利润=收入-显性-隐性=1 万。'}
-],
-'语言（Let Them Eat Dog 精读）':[
-{q:'Discussion 1: What is the author’s central claim?',a:'Open question — approach / 开放题——答题思路',exp:'State the thesis in one sentence and identify the action or position the author wants readers to accept. / 用一句话概括中心论点，并指出作者最想说服读者接受的做法或立场。'},
-{q:'Discussion 2: Where does the satire appear?',a:'Open question — approach / 开放题——答题思路',exp:'Find 1-2 instances of irony, exaggeration or analogy and explain how they weaken the opposing view. / 找 1-2 处反语、夸张或类比，说明其如何削弱对立观点。'},
-{q:'Discussion 3: Find one logical, one emotional and one ethical appeal.',a:'Open question — approach / 开放题——答题思路',exp:'Locate reasoning/evidence (logos), emotional resonance (pathos), and credibility or moral stance (ethos) respectively. / 分别定位：数据与推理（logos）、情绪共鸣（pathos）、作者可信度与道德立场（ethos）。'},
-{q:'Discussion 4: How does the author handle counterarguments?',a:'Open question — approach / 开放题——答题思路',exp:'Check whether he concedes then refutes, or simply dissolves the opposition with satire. / 看作者是否先让步再反驳，还是直接用讽刺消解反方。'},
-{q:'Discussion 5: What is the tone and who is the target audience?',a:'Open question — approach / 开放题——答题思路',exp:'Describe the tone (playful, serious, provocative) and infer the audience’s prior stance. / 描述语气（戏谑、严肃、挑衅），并推断目标读者及其既有立场。'},
-{q:'Discussion 6: How does the essay’s structure unfold?',a:'Open question — approach / 开放题——答题思路',exp:'Track the paragraphs: hook → claim → argument → rebuttal → conclusion, noting each part’s function. / 按段落梳理：引子→主张→论证→反驳→结论，标出各部分功能。'}
-],
-'文学（人鼠之间 1-2 章）':[
-{q:'Tracking: Animal imagery and Lennie',a:'Animals mirror Lennie’s strength, innocence and lack of control / 以动物影射 Lennie 的力量、天真与失控倾向',exp:'Repeated animal similes make Lennie seem like an overgrown pet: strong, childlike, accident-prone. / 反复的动物比喻让 Lennie 像“大型宠物”：力气大、心智单纯、容易闯祸。'},
-{q:'Tracking: The meaning of “Soledad”',a:'Soledad means “loneliness” in Spanish / Soledad 西语意为“孤独”',exp:'The town’s name announces the novel’s theme of isolation. / 小镇名点出全书的孤独主题。'},
-{q:'Tracking: The hiding place',a:'George making Lennie memorize the hiding place is foreshadowing / George 让 Lennie 记住藏身处是伏笔',exp:'It sets up their rendezvous after later crises. / 为后文 Lennie 闯祸后的汇合做铺垫。'},
-{q:'Tracking: The map of power',a:'Map who holds power and on what basis / 梳理谁掌握权力、凭什么',exp:'Curley relies on status and temper; Slim on skill and reputation; George and Lennie depend on each other. / Curley 依仗身份与脾气，Slim 凭手艺与声望，George 与 Lennie 相依为命。'},
-{q:'Tracking: The farm dream in the Depression',a:'A spiritual refuge amid the Depression (the American Dream motif) / 大萧条背景下的精神寄托（美国梦母题）',exp:'Owning a farm is an emotional outlet for marginalized workers, and hints at its unattainability. / “拥有自己的农场”是底层劳动者的精神出口，也暗示其难以实现。'},
-{q:'Quiz 1: What does “Soledad” mean in Spanish?',a:'Loneliness / 孤独',exp:'The town’s name announces the theme of isolation. / 小镇名点出全书孤独主题。'},
-{q:'Quiz 2: What is the narrative function of the hiding place?',a:'Foreshadowing / 伏笔',exp:'It prepares the meeting point after Lennie’s later trouble. / 为后文危机后的汇合地点做铺垫。'},
-{q:'Quiz 3: Why is Lennie repeatedly linked with animals?',a:'To mirror his strength, innocence and lack of control / 影射其力量、天真与失控倾向',exp:'The imagery externalizes Lennie’s “strong body, immature mind” trait and hints at danger. / 动物意象外化 Lennie“力气大但心智不成熟”的特质，预示风险。'}
-]
+ "生物": {
+  "Unit2（细胞膜与运输）": [
+   {
+    "q": "How does oxygen cross the cell membrane?",
+    "a": "Simple diffusion / 简单扩散",
+    "exp": "O₂ is small and nonpolar, so it passes directly through the phospholipid bilayer down its gradient — no ATP needed. / O₂ 分子小且非极性，直接穿过磷脂双分子层，顺浓度梯度，不耗 ATP。"
+   },
+   {
+    "q": "What happens to an animal cell in a hypertonic solution?",
+    "a": "It shrinks (crenation) / 皱缩",
+    "exp": "Water flows out by osmosis, so the cell loses water and shrinks. / 外界浓度高，水经渗透外流，细胞失水皱缩。"
+   },
+   {
+    "q": "Does facilitated diffusion require ATP?",
+    "a": "No — it only needs channel or carrier proteins / 不需要，只需通道蛋白（或载体蛋白）",
+    "exp": "It moves down the concentration gradient and is a form of passive transport. / 顺浓度梯度运输，属于被动运输。"
+   },
+   {
+    "q": "What powers the Na+/K+ pump to move ions against their gradients?",
+    "a": "ATP / ATP 供能",
+    "exp": "Active transport: hydrolyzing ATP pumps out 3 Na+ and pumps in 2 K+ per cycle. / 主动运输：水解 ATP，每循环泵出 3 个 Na+、泵入 2 个 K+。"
+   },
+   {
+    "q": "What happens to a red blood cell in distilled water?",
+    "a": "It swells and bursts (hemolysis) / 膨胀破裂（溶血）",
+    "exp": "Distilled water is hypotonic, so water rushes in until the cell bursts. / 蒸馏水是低渗溶液，水大量流入，红细胞吸水涨破。"
+   }
+  ]
+ },
+ "数学": {
+  "Function": [
+   {
+    "q": "f(x)=3x+1. Find f(4) and f(a-1).",
+    "a": "13 and 3a-2 / 13 和 3a-2",
+    "exp": "f(4)=3×4+1=13; f(a-1)=3(a-1)+1=3a-2. / f(4)=13；f(a-1)=3(a-1)+1=3a-2。"
+   },
+   {
+    "q": "f(x)=x²-2x. Find f(3)-f(1).",
+    "a": "4 / 4",
+    "exp": "f(3)=9-6=3, f(1)=1-2=-1, so 3-(-1)=4. / f(3)=3，f(1)=-1，差为 4。"
+   },
+   {
+    "q": "Is (2,3)(4,5)(2,7) a function?",
+    "a": "No — x=2 has two outputs / 不是，x=2 有两个输出",
+    "exp": "A function must map each input to exactly one output. / 函数要求每个输入只对应唯一输出。"
+   },
+   {
+    "q": "Domain of f(x)=1/(x-2)?",
+    "a": "x≠2 / x≠2",
+    "exp": "The denominator cannot be zero, so x-2≠0. / 分母不能为 0，即 x-2≠0。"
+   },
+   {
+    "q": "Slope of the line through (1,2) and (5,10)?",
+    "a": "2 / 2",
+    "exp": "k=(10-2)/(5-1)=8/4=2. / 斜率 k=(10-2)/(5-1)=2。"
+   }
+  ]
+ },
+ "语言": {
+  "Let Them Eat Dog 精读": [
+   {
+    "q": "Discussion 1: What is the author’s central claim?",
+    "a": "Open question — approach / 开放题——答题思路",
+    "exp": "State the thesis in one sentence and identify the action or position the author wants readers to accept. / 用一句话概括中心论点，并指出作者最想说服读者接受的做法或立场。"
+   },
+   {
+    "q": "Discussion 2: Where does the satire appear?",
+    "a": "Open question — approach / 开放题——答题思路",
+    "exp": "Find 1-2 instances of irony, exaggeration or analogy and explain how they weaken the opposing view. / 找 1-2 处反语、夸张或类比，说明其如何削弱对立观点。"
+   },
+   {
+    "q": "Discussion 3: Find one logical, one emotional and one ethical appeal.",
+    "a": "Open question — approach / 开放题——答题思路",
+    "exp": "Locate reasoning/evidence (logos), emotional resonance (pathos), and credibility or moral stance (ethos) respectively. / 分别定位：数据与推理（logos）、情绪共鸣（pathos）、作者可信度与道德立场（ethos）。"
+   },
+   {
+    "q": "Discussion 4: How does the author handle counterarguments?",
+    "a": "Open question — approach / 开放题——答题思路",
+    "exp": "Check whether he concedes then refutes, or simply dissolves the opposition with satire. / 看作者是否先让步再反驳，还是直接用讽刺消解反方。"
+   },
+   {
+    "q": "Discussion 5: What is the tone and who is the target audience?",
+    "a": "Open question — approach / 开放题——答题思路",
+    "exp": "Describe the tone (playful, serious, provocative) and infer the audience’s prior stance. / 描述语气（戏谑、严肃、挑衅），并推断目标读者及其既有立场。"
+   },
+   {
+    "q": "Discussion 6: How does the essay’s structure unfold?",
+    "a": "Open question — approach / 开放题——答题思路",
+    "exp": "Track the paragraphs: hook → claim → argument → rebuttal → conclusion, noting each part’s function. / 按段落梳理：引子→主张→论证→反驳→结论，标出各部分功能。"
+   }
+  ]
+ },
+ "文学": {
+  "归档单元": [
+   {
+    "q": "Tracking: Animal imagery and Lennie",
+    "a": "Animals mirror Lennie’s strength, innocence and lack of control / 以动物影射 Lennie 的力量、天真与失控倾向",
+    "exp": "Repeated animal similes make Lennie seem like an overgrown pet: strong, childlike, accident-prone. / 反复的动物比喻让 Lennie 像“大型宠物”：力气大、心智单纯、容易闯祸。"
+   },
+   {
+    "q": "Tracking: The meaning of “Soledad”",
+    "a": "Soledad means “loneliness” in Spanish / Soledad 西语意为“孤独”",
+    "exp": "The town’s name announces the novel’s theme of isolation. / 小镇名点出全书的孤独主题。"
+   },
+   {
+    "q": "Tracking: The hiding place",
+    "a": "George making Lennie memorize the hiding place is foreshadowing / George 让 Lennie 记住藏身处是伏笔",
+    "exp": "It sets up their rendezvous after later crises. / 为后文 Lennie 闯祸后的汇合做铺垫。"
+   },
+   {
+    "q": "Tracking: The map of power",
+    "a": "Map who holds power and on what basis / 梳理谁掌握权力、凭什么",
+    "exp": "Curley relies on status and temper; Slim on skill and reputation; George and Lennie depend on each other. / Curley 依仗身份与脾气，Slim 凭手艺与声望，George 与 Lennie 相依为命。"
+   },
+   {
+    "q": "Tracking: The farm dream in the Depression",
+    "a": "A spiritual refuge amid the Depression (the American Dream motif) / 大萧条背景下的精神寄托（美国梦母题）",
+    "exp": "Owning a farm is an emotional outlet for marginalized workers, and hints at its unattainability. / “拥有自己的农场”是底层劳动者的精神出口，也暗示其难以实现。"
+   },
+   {
+    "q": "Quiz 1: What does “Soledad” mean in Spanish?",
+    "a": "Loneliness / 孤独",
+    "exp": "The town’s name announces the theme of isolation. / 小镇名点出全书孤独主题。"
+   },
+   {
+    "q": "Quiz 2: What is the narrative function of the hiding place?",
+    "a": "Foreshadowing / 伏笔",
+    "exp": "It prepares the meeting point after Lennie’s later trouble. / 为后文危机后的汇合地点做铺垫。"
+   },
+   {
+    "q": "Quiz 3: Why is Lennie repeatedly linked with animals?",
+    "a": "To mirror his strength, innocence and lack of control / 影射其力量、天真与失控倾向",
+    "exp": "The imagery externalizes Lennie’s “strong body, immature mind” trait and hints at danger. / 动物意象外化 Lennie“力气大但心智不成熟”的特质，预示风险。"
+   }
+  ]
+ }
 };
 function allQuestions(){
   const arr=[];
-  Object.keys(BANK).forEach(subj=>BANK[subj].forEach(x=>arr.push({subject:subj,q:x.q,a:x.a,exp:x.exp||''})));
-  store.get('customQ',[]).forEach(x=>arr.push({subject:x.subject,q:x.q,a:x.a,exp:x.exp||'',custom:true}));
+  Object.keys(BANK).forEach(function(subj){
+    Object.keys(BANK[subj]).forEach(function(unit){
+      BANK[subj][unit].forEach(function(x){
+        arr.push({subject:subj,unit:unit,q:x.q,a:x.a,exp:x.exp||''});
+      });
+    });
+  });
+  store.get('customQ',[]).forEach(function(x){arr.push({subject:x.subject,unit:x.unit||'导入',q:x.q,a:x.a,exp:x.exp||'',custom:true});});
   return arr;
+}
+function bankView(){
+  const view={};
+  Object.keys(BANK).forEach(function(s){view[s]=Object.assign({},BANK[s]);});
+  store.get('customQ',[]).forEach(function(x){
+    const u=x.unit||'导入';
+    if(!view[x.subject])view[x.subject]={};
+    if(!view[x.subject][u])view[x.subject][u]=[];
+    view[x.subject][u].push({q:x.q,a:x.a,exp:x.exp||''});
+  });
+  return view;
 }
 function allSubjects(){
   const s=[];allQuestions().forEach(q=>{if(!s.includes(q.subject))s.push(q.subject);});return s;
@@ -560,6 +667,7 @@ function allSubjects(){
 /* ================= 题库页面与抽查 ================= */
 let bankMode='browse';
 let bankSubject='';
+let accOpen={};
 const quiz={list:[],i:0,right:0,bySubj:{}};
 function renderBank(){
   const el=$('#sec-bank');
@@ -567,20 +675,23 @@ function renderBank(){
   const modes=[['browse','顺序浏览'],['quiz','抽查模式'],['import','导入新题']];
   let body='';
   if(bankMode==='browse'){
-    const sel=bankSubject&&subs.includes(bankSubject)?bankSubject:'';
-    const pool=sel?allQuestions().filter(q=>q.subject===sel):allQuestions();
-    body='<label class="f" style="max-width:340px">选择科目<select id="bankSubjectSel"><option value="">全部科目（共 '+allQuestions().length+' 题）</option>'
-      +subs.map(s=>'<option value="'+esc(s)+'"'+(s===sel?' selected':'')+'>'+esc(s)+'（'+allQuestions().filter(q=>q.subject===s).length+' 题）</option>').join('')+'</select></label>'
-      +'<div class="card" style="background:var(--bg2);padding:8px 14px">'
-      +pool.map(function(q,i){
-        return '<div class="qrow">'
-          +'<div class="term"><span class="tag" style="flex:none">'+esc(q.subject)+'</span>'
-          +'<span class="qtext" title="'+esc(q.q)+'">'+esc(q.q)+'</span>'
-          +(q.custom?'<span class="tag" style="color:var(--white);flex:none">导入</span>':'')
-          +'<button class="btn btn-sm btn-ghost ansBtn">答</button></div>'
-          +'<div class="ansInline"><div class="ansBox show" style="margin:6px 0 10px"><div><b>答案：</b>'+esc(q.a)+'</div>'+(q.exp?'<div class="muted" style="margin-top:6px">解析：'+esc(q.exp)+'</div>':'')+'</div></div>'
-          +'</div>';
-      }).join('')+'</div>';
+    const view=bankView();
+    body=Object.keys(view).map(function(subj){
+      const units=view[subj];
+      const total=Object.keys(units).reduce(function(n,u){return n+units[u].length;},0);
+      const unitHtml=Object.keys(units).map(function(unit){
+        const isArc=unit.indexOf('归档')>=0;
+        return '<div style="margin-top:8px"><div class="row" style="justify-content:flex-start;gap:8px"><h4 style="margin:0;font-size:15px">'+esc(unit)+'</h4>'+(isArc?'<span class="tag" style="color:var(--white)">归档</span>':'')+'</div>'
+          +units[unit].map(function(q){
+            return '<div class="qrow"><div class="term"><span class="qtext" title="'+esc(q.q)+'">'+esc(q.q)+'</span>'
+              +'<button class="btn btn-sm btn-ghost ansBtn">答</button></div>'
+              +'<div class="ansInline"><div class="ansBox show" style="margin:6px 0 10px"><div><b>答案：</b>'+esc(q.a)+'</div>'+(q.exp?'<div class="muted" style="margin-top:6px">解析：'+esc(q.exp)+'</div>':'')+'</div></div></div>';
+          }).join('')+'</div>';
+      }).join('');
+      return '<div class="card" style="padding:6px 10px;margin:10px 0">'
+        +'<button class="accHd" data-subj="'+esc(subj)+'">'+esc(subj)+'（'+total+' 题）'+(accOpen[subj]?' ▲':' ▼')+'</button>'
+        +'<div class="accBody'+(accOpen[subj]?' open':'')+'">'+unitHtml+'</div></div>';
+    }).join('');
   }else if(bankMode==='quiz'){
     body='<p class="muted">选择抽查范围（默认全选），随机抽 5 题；显示答案后如实自评，正确率低于 80% 的科目会提示“下周加一档”。</p>'
       +'<div class="chipRow" id="quizSubs">'+subs.map(s=>'<div class="chip subjChip on" data-subj="'+esc(s)+'">'+esc(s)+'</div>').join('')+'</div>'
@@ -589,8 +700,8 @@ function renderBank(){
   }else{
     const custom=store.get('customQ',[]);
     body='<div class="card" style="background:var(--bg2)"><h3>文本导入格式说明</h3>'
-      +'<p class="muted">每行一题，用竖线 | 分隔四个字段：<b>科目 | 题目 | 答案 | 解析</b>（解析可省略）。</p>'
-      +'<p class="muted" style="font-family:monospace">例：数学 | 求 f(x)=x² 在 x=3 处的值 | 9 | 直接代入计算</p></div>'
+      +'<p class="muted">每行一题，用竖线 | 分隔：<b>科目 | 单元 | 题目 | 答案 | 解析</b>（单元可省略、解析可省略）。科目或单元不存在时自动创建对应分组。</p>'
+      +'<p class="muted" style="font-family:monospace">例：数学 | Function | 求 f(x)=x² 在 x=3 处的值 | 9 | 直接代入计算</p></div>'
       +'<textarea id="importBox" style="min-height:150px" placeholder="在这里粘贴题目，每行一题"></textarea>'
       +'<div class="btn-row"><button class="btn btn-green" id="doImportBtn">导入题目</button></div>'
       +(custom.length?'<h3>已导入的题目（'+custom.length+'）</h3>'+custom.map(function(q,i){
@@ -598,9 +709,9 @@ function renderBank(){
         +'<div class="btn-row"><button class="btn btn-sm btn-red delCustomBtn" data-i="'+i+'">删除</button></div></div>';
       }).join(''):'');
   }
-  el.innerHTML='<div class="card"><h2>题库与抽查</h2><div class="muted">内置 6 科静态题库，支持粘贴导入新题，全部保存在本地</div></div>'
-    +'<div class="card"><div class="chipRow">'+modes.map(m=>'<div class="chip modeChip'+(bankMode===m[0]?' on':'')+'" data-mode="'+m[0]+'">'+m[1]+'</div>').join('')+'</div>'
-    +body+'</div>';
+  el.innerHTML='<div class="card"><h2>题库与抽查</h2><div class="muted">内置静态题库（学科 → 单元 → 题目），支持粘贴导入新题，全部保存在本地</div></div>'
+    +'<div class="card" style="padding:10px 14px"><div class="chipRow" style="margin:0">'+modes.map(m=>'<div class="chip modeChip'+(bankMode===m[0]?' on':'')+'" data-mode="'+m[0]+'">'+m[1]+'</div>').join('')+'</div></div>'
+    +'<div id="bankBodyWrap">'+body+'</div>';
 }
 function startQuiz(){
   const chosen=$$('#quizSubs .subjChip.on').map(c=>c.dataset.subj);
@@ -776,6 +887,76 @@ function chatSystemPrompt(){
 function gradeSystemPrompt(){
   return '你是一位 AP 课程老师。学生会发来作文 / SAQ / FRQ 的照片或文字。请按对应 rubric 批改：给出分数（或等级）、逐条点评（优点 + 问题，指出具体位置）、以及一份修改后的示范版本。用中文回复，点评要具体可执行。';
 }
+/* ---- 六类意图解析：新增/完成/取消/改期/修正/查询 ---- */
+let pendingChatChanges=null;
+let pendingIntents=[];
+function classifyIntent(text){
+  if(/不是.{1,20}是|改成叫|说错了|名字写错了/.test(text))return 'fix';
+  if(/改到|延期|推迟|往后挪|挪到/.test(text))return 'reschedule';
+  if(/考完了|交[了作业完]*了|做完了|完成了|搞定了/.test(text))return 'complete';
+  if(/不收了|不用做|不用写了|取消|别做了|删掉|不要了/.test(text))return 'cancel';
+  if(/有什么|是什么|几点|多少|吗[？?!！]?$/.test(text)&&/明天|今天|周[一二三四五六日天]|这周|下周/.test(text))return 'query';
+  return 'add';
+}
+function relDate(w){
+  const d=new Date();
+  if(w==='明天')d.setDate(d.getDate()+1);
+  else if(w==='后天')d.setDate(d.getDate()+2);
+  else{const map={'周一':1,'周二':2,'周三':3,'周四':4,'周五':5,'周六':6,'周日':0,'周天':0};const t=map[w];if(t!==undefined){let a=(t-d.getDay()+7)%7;if(a===0)a=7;d.setDate(d.getDate()+a);}}
+  return isoOf(d);
+}
+function parseDateFrom(text){
+  const isoM=text.match(/(\d{4})[-年./](\d{1,2})[-月./](\d{1,2})/);
+  if(isoM)return isoM[1]+'-'+pad(+isoM[2])+'-'+pad(+isoM[3]);
+  const w=text.match(/明天|后天|周[一二三四五六日天]/);
+  return w?relDate(w[0]):null;
+}
+function buildChanges(text){
+  const cls=classifyIntent(text);
+  const changes=[];
+  const tasks=getTasks();
+  const subs=SUBJ_NAMES.filter(function(s){return text.indexOf(s)>=0;});
+  function matchTasks(){return tasks.filter(function(t){return !t.done&&!t.cancelled&&subs.some(function(s){return t.text.indexOf(s)>=0;});});}
+  if(cls==='complete'){
+    matchTasks().forEach(function(t){changes.push({type:'taskDone',label:'完成任务：'+t.text,taskId:t.id});});
+    getExams().forEach(function(e){if(subs.indexOf(e.subject)>=0&&(!e.status||e.status==='待考'))changes.push({type:'examDone',label:'标记已考：'+e.subject+' '+(e.date||''),examId:e.id});});
+  }else if(cls==='cancel'){
+    matchTasks().forEach(function(t){changes.push({type:'taskCancel',label:'取消任务：'+t.text,taskId:t.id});});
+    getExams().forEach(function(e){if(subs.indexOf(e.subject)>=0&&(!e.status||e.status==='待考'))changes.push({type:'examCancel',label:'取消考试：'+e.subject+' '+(e.date||''),examId:e.id});});
+  }else if(cls==='reschedule'){
+    const date=parseDateFrom(text);
+    if(!date)changes.push({type:'none',label:'未能识别新日期'});
+    else{
+      getExams().forEach(function(e){if(subs.indexOf(e.subject)>=0&&(!e.status||e.status==='待考'))changes.push({type:'examMove',label:'考试改期：'+e.subject+' → '+date,examId:e.id,date:date});});
+      matchTasks().forEach(function(t){changes.push({type:'taskMove',label:'任务改期：'+t.text+' → '+date,taskId:t.id,date:date});});
+    }
+  }else if(cls==='fix'){
+    const m=text.match(/不是(.{1,20}?)是(.{1,30})/)||text.match(/(.{1,20}?)改成(.{1,30})/);
+    if(m){
+      const from=m[1].trim(),to=m[2].trim();
+      tasks.forEach(function(t){if(t.text.indexOf(from)>=0)changes.push({type:'taskFix',label:'修正任务：「'+from+'」→「'+to+'」',taskId:t.id,from:from,to:to});});
+      getExams().forEach(function(e){if(e.subject===from)changes.push({type:'examFix',label:'修正考试科目：'+from+' → '+to,examId:e.id,to:to});});
+    }else changes.push({type:'none',label:'未能识别修正内容'});
+  }
+  return{cls:cls,changes:changes};
+}
+function applyChanges(changes){
+  let n=0;
+  const tasks=getTasks();const exams=getExams();
+  (changes||[]).forEach(function(c){
+    if(c.type==='taskDone'){const t=tasks.find(function(x){return x.id===c.taskId;});if(t){t.done=true;n++;}}
+    else if(c.type==='taskCancel'){const t=tasks.find(function(x){return x.id===c.taskId;});if(t){t.cancelled=true;n++;}}
+    else if(c.type==='taskMove'){const t=tasks.find(function(x){return x.id===c.taskId;});if(t){t.text=t.text.replace(/（截止[:：][^）]*）/g,'')+'（截止：'+c.date+'）';n++;}}
+    else if(c.type==='taskFix'){const t=tasks.find(function(x){return x.id===c.taskId;});if(t){t.text=t.text.split(c.from).join(c.to);n++;}}
+    else if(c.type==='examDone'){const e=exams.find(function(x){return x.id===c.examId;});if(e){e.status='已考';n++;}}
+    else if(c.type==='examCancel'){const e=exams.find(function(x){return x.id===c.examId;});if(e){e.status='已取消';n++;}}
+    else if(c.type==='examMove'){const e=exams.find(function(x){return x.id===c.examId;});if(e){e.date=c.date;if(!e.status)e.status='待考';n++;}}
+    else if(c.type==='examFix'){const e=exams.find(function(x){return x.id===c.examId;});if(e){e.subject=c.to;n++;}}
+  });
+  saveTasks(tasks);store.set('exams',exams);
+  refreshTaskCards();
+  return n;
+}
 function pushChat(role,content,key){
   const h=store.get(key||'chat',[]);
   h.push({role:role,content:content,ts:Date.now()});
@@ -820,6 +1001,35 @@ async function sendChat(){
     else{ov[target]='放假（用户确认）';toast('已记录：'+target+' 放假，轻松模式生效');}
     store.set('holidays_override',ov);
     refreshTaskCards();
+    return;
+  }
+  const intent=classifyIntent(text);
+  if(chatKey==='chat'&&intent!=='add'){
+    if(intent==='query'){
+      pushChat('user',text,'chat');
+      const tom=isoOf(new Date(Date.now()+86400000));
+      const tm=getTasks().filter(function(t){return !t.done&&!t.cancelled;}).map(function(t){return t.text;});
+      const ex=getExams().filter(function(e){return e.date===tom&&(!e.status||e.status==='待考');}).map(function(e){return e.subject;});
+      const hol=holidayOn(tom);
+      const ans='明天（'+tom+'）'+(hol?' · 放假（'+hol+'），轻松模式':'')+'\n任务：'+(tm.length?tm.join('；'):'（今日已清，明日待排程）')+'\n考试：'+(ex.length?ex.join('、'):'无');
+      pushChat('assistant',ans,'chat');
+      renderAI();
+      return;
+    }
+    const bc=buildChanges(text);
+    const real=bc.changes.filter(function(c){return c.type!=='none';});
+    if(!real.length){
+      pushChat('user',text,'chat');
+      pushChat('assistant','未识别到可执行的变更：'+(bc.changes[0]?bc.changes[0].label:''),'chat');
+      renderAI();
+      return;
+    }
+    pushChat('user',text,'chat');
+    pendingChatChanges=real;
+    const lines=real.map(function(c){return '· '+c.label;}).join('\n');
+    openModal('<h2>确认变更</h2><div class="warnBox">'+esc(lines)+'</div>'
+      +'<div class="btn-row"><button class="btn btn-green" id="intentOk">确认执行</button><button class="btn btn-ghost" id="wkCancel4">取消</button></div>');
+    renderAI();
     return;
   }
   if(text==='学习完成'&&chatKey==='chat'){archiveStudyDay();return;}
@@ -926,6 +1136,7 @@ function nextExamDate(e){return e.date||null;}
 function examCountdown(){
   let best=null;
   getExams().forEach(function(e){
+    if(e.status==='已考'||e.status==='已取消')return;
     const dt=nextExamDate(e);
     const days=Math.round((new Date(dt+'T00:00:00').getTime()-new Date(todayISO()+'T00:00:00').getTime())/86400000);
     if(days>=0&&(!best||days<best.days))best={subject:e.subject,days:days,dt:dt,id:e.id};
@@ -941,14 +1152,7 @@ function examBarHtml(){
 /* ---- 今日任务 ---- */
 let pendingPlan=null;
 function getTasks(){return store.get('tasks',[]);}
-function saveTasks(t){
-  store.set('tasks',t);
-  const log=store.get('tasklog',{});
-  const day=log[todayISO()]||{};
-  t.forEach(function(x){day[x.text]=!!x.done;});
-  log[todayISO()]=day;
-  store.set('tasklog',log);
-}
+function saveTasks(t){store.set('tasks',t);}
 function getPlan(){const p=store.get('today_plan',null);return (p&&p.date===todayISO())?p:null;}
 /* ---- 内置校历（BASIS 2026-2027 学年，后续学年为预估） ---- */
 const SCHOOL_HOLIDAYS=[
@@ -1037,7 +1241,7 @@ function tasksCardHtml(){
   if(nm>=21*60+50&&nm<22*60&&!archived)hint='<div class="hintStrip">花 2 分钟把明天任务发给 AI 排程</div>';
   const holidayBanner=holiday?'<div class="warnBox">今日放假（'+esc(holiday)+'）· 轻松模式：任务量减半、不加新任务、不触发 22:00 欠账</div>':'';
   if(nm>=22*60&&store.get('debtConverted')!==todayISO()&&!archived&&!holiday){
-    const left=tasks.filter(t=>!t.done&&!t.deferred);
+    const left=tasks.filter(t=>!t.done&&!t.deferred&&!t.cancelled);
     if(left.length){
       const slotOf={};const quadOf={};
       if(plan)plan.items.forEach(function(it){slotOf[it.task]=it.slot||'';quadOf[it.task]=it.quad||'○';});
@@ -1059,11 +1263,11 @@ function tasksCardHtml(){
       if(!urgents.length)toast('已过 22:00，剩余任务已自动记欠账，明天还');
     }
   }
-  const leftN=tasks.filter(t=>!t.done).length;
+  const leftN=tasks.filter(t=>!t.done&&!t.cancelled).length;
   const closedBanner=(archived)?'<div class="warnBox">今日已归档</div>':'';
   const taskRows=tasks.map(function(t,i){
-    const st=t.done?' taskTxt doneT':'';
-    const tag=t.deferred?'<span class="tag" style="color:var(--white)">延期完成</span>':(t.done?'<span class="tag">已完成</span>':'');
+    const st=(t.done||t.cancelled)?' taskTxt doneT':'';
+    const tag=t.cancelled?'<span class="tag">已取消</span>':(t.deferred?'<span class="tag" style="color:var(--white)">延期完成</span>':(t.done?'<span class="tag">已完成</span>':''));
     const steps=(t.steps&&t.steps.length)?('<div class="steps'+(t.open?' open':'')+'">'+t.steps.map(function(s,j){
       return '<div class="stepRow"><label class="chk" style="width:24px;height:24px"><input type="checkbox" class="stepChk" data-i="'+i+'" data-j="'+j+'" '+(s.done?'checked':'')+'><span></span></label><span'+(s.done?' class="strike"':'')+'>'+esc(s.text)+'</span></div>';
     }).join('')+'</div>'):'';
@@ -1197,7 +1401,7 @@ function cjConfirm(){
   if(holidayOn(todayISO())){toast('假期轻松模式：不加新任务');return;}
   const t=getTasks();
   cjPending.homework.concat(cjPending.tasks).forEach(function(x,i){
-    t.push({id:Date.now()+i,text:x,done:false,steps:null,open:false});
+    t.push({id:Date.now()+i,text:x,done:false,steps:null,open:false,src:'用户输入'});
   });
   saveTasks(t);
   const exams=getExams();
@@ -1209,6 +1413,36 @@ function cjConfirm(){
   refreshTaskCards();
   toast('已写入今日任务，开始理解安排');
   stage1Understand();
+}
+/* ---- 午夜日切 ---- */
+function dayCut(){
+  const last=store.get('lastday');
+  const today=todayISO();
+  if(last===today)return false;
+  if(last){
+    const yTasks=getTasks();
+    const c=getCheckins()[last]||{};
+    const rec={tasks:yTasks.filter(function(t){return !t.cancelled;}).map(function(t){return{text:t.text,done:!!t.done,src:t.src||''};}),
+      fixed:getFixedItems().map(function(t,idx){return{name:t,done:!!c[idx]};})};
+    const td=store.get('taskday',{});td[last]=rec;store.set('taskday',td);
+    const dl=store.get('dailylog',{});
+    if(!dl[last])dl[last]={note:'日切自动归档',tasks:rec.tasks,ts:Date.now()};
+    store.set('dailylog',dl);
+    store.set('tasks',[]);
+    store.set('today_plan',null);
+    store.set('archived',null);
+    store.set('debtConverted',null);
+    store.set('reduceToday',null);
+    const d=new Date();
+    if(d.getDay()===6){
+      const sp=store.get('satplan',null);
+      if(sp&&sp.week===weekKeyOf(d)){
+        store.set('tasks',sp.items.map(function(x,i){return{id:Date.now()+i,text:x,done:false,steps:null,open:false,src:'AI生成'};}));
+      }
+    }
+  }
+  store.set('lastday',today);
+  return true;
 }
 function archiveToday(note){
   const plan=getPlan();
@@ -1227,7 +1461,7 @@ function scheduleCollect(){
   pool.push('学校作业','晚间学习','睡前阅读');
   return{
     pool:pool,
-    tasks:getTasks().filter(t=>!t.done).map(t=>t.text),
+    tasks:getTasks().filter(t=>!t.done&&!t.cancelled).map(t=>t.text),
     debts:store.get('debts',[]).filter(d=>!d.done).map(d=>d.subject+'：'+d.content),
     exams:getExams().map(function(e){const dt=nextExamDate(e);const days=Math.round((new Date(dt+'T00:00:00').getTime()-new Date(todayISO()+'T00:00:00').getTime())/86400000);return e.subject+' '+dt+'（'+days+' 天后）';})
   };
@@ -1266,6 +1500,7 @@ function summaryHtml(){
     +'<h3 style="margin-top:6px">临时考试</h3>'+(sm.exams.length?sm.exams.map(function(e){return row(e.subject+' '+e.date,e.source);}).join(''):'<p class="muted">无</p>')
     +'<h3>作业截止分组</h3>'+(sm.dueGroups.length?sm.dueGroups.map(function(g){return row(g.due+'：'+g.subjects.join('、'),g.source);}).join(''):'<p class="muted">无</p>')
     +'<h3>任务清单</h3>'+(sm.tasks.length?sm.tasks.map(function(t){return row('['+t.subject+'] '+t.text,t.source);}).join(''):'<p class="muted">无</p>')
+    +(pendingIntents.length?'<h3>变更清单（确认后执行）</h3>'+pendingIntents.map(function(c){return '<div class="debtRow"><div class="grow">'+esc(c.label)+'</div></div>';}).join(''):'')
     +((sm.speculative&&sm.speculative.length)?'<h3>推测（原文未找到出处）</h3>'+sm.speculative.map(function(x){return '<div class="debtRow"><span class="tag" style="color:var(--white)">推测</span><div class="grow">'+esc(x)+'</div></div>';}).join(''):'')
     +'<div class="btn-row"><button class="btn btn-green" id="schedConfirm1">理解正确，开始排程</button><button class="btn btn-ghost" id="schedEdit1">修改</button></div></div>';
 }
@@ -1276,6 +1511,7 @@ async function stage1Understand(){
   if(!(s.apiKey&&s.apiKey.trim())){
     pendingSummary=buildSummaryLocal();
     schedStage='summary';
+    pendingIntents=[];
     toast('未配置 Key，使用本地理解摘要');
     refreshTaskCards();
     return;
@@ -1302,6 +1538,8 @@ async function stage1Understand(){
       speculative:(o.speculative||[]).map(String)
     };
     schedStage='summary';
+    const bi=buildChanges(note||'');
+    pendingIntents=(bi.cls!=='add'&&bi.cls!=='query')?bi.changes:[];
   }catch(err){
     toast('理解失败：'+err.message);
   }
@@ -1372,10 +1610,10 @@ function confirmPlan(){
   if(!pendingPlan)return;
   const old=getTasks();
   const newTasks=pendingPlan.map(function(it,i){
-    const base={id:Date.now()+i,text:it.task,done:false,steps:(it.steps&&it.steps.length?it.steps:[]).map(function(s){return{text:s,done:false};}),open:false};
+    const base={id:Date.now()+i,text:it.task,done:false,steps:(it.steps&&it.steps.length?it.steps:[]).map(function(s){return{text:s,done:false};}),open:false,src:'AI生成'};
     if(it.doneFrom){
       const o=old.filter(function(x){return x.text===it.doneFrom;})[0];
-      if(o){base.id=o.id;base.done=!!o.done;}
+      if(o){base.id=o.id;base.done=!!o.done;base.src=o.src||'AI生成';}
     }
     return base;
   });
@@ -1690,6 +1928,7 @@ function examsHtml(){
     const days=Math.round((new Date(dt+'T00:00:00').getTime()-new Date(todayISO()+'T00:00:00').getTime())/86400000);
     return '<div class="debtRow"><span class="tag">'+esc(e.subject)+'</span>'
       +'<div class="grow">'+dt+'（'+(days<0?'已过':days+' 天后')+'）</div>'
+      +'<span class="tag">'+esc(e.status||'待考')+'</span>'
       +'<button class="btn btn-sm btn-red examDel" data-id="'+e.id+'">删除</button></div>';
   }).join('');
   return list||'<p class="muted">暂无考试</p>';
@@ -1800,6 +2039,8 @@ document.addEventListener('click',function(e){
   if(e.target.closest('#homeStart')){switchTab('sec-today');return;}
   const mc=e.target.closest('.modeChip');
   if(mc){bankMode=mc.dataset.mode;renderBank();return;}
+  const ah=e.target.closest('.accHd');
+  if(ah){const k=ah.dataset.subj;accOpen[k]=!accOpen[k];renderBank();return;}
   const sc=e.target.closest('.subjChip');
   if(sc){sc.classList.toggle('on');return;}
   const ab=e.target.closest('.ansBtn');
@@ -1815,7 +2056,11 @@ document.addEventListener('click',function(e){
     if(!txt){toast('请粘贴题目文本');return;}
     const lines=txt.split(/\n+/).map(l=>l.trim()).filter(Boolean);
     const arr=store.get('customQ',[]);let n=0;
-    for(const line of lines){const p=line.split('|').map(s=>s.trim());if(p.length<3||!p[0]||!p[1]||!p[2])continue;arr.push({subject:p[0],q:p[1],a:p[2],exp:p[3]||''});n++;}
+    for(const line of lines){
+      const p=line.split('|').map(s=>s.trim());
+      if(p.length>=5){if(!p[0]||!p[2]||!p[3])continue;arr.push({subject:p[0],unit:p[1]||'导入',q:p[2],a:p[3],exp:p[4]||''});n++;}
+      else if(p.length>=3){if(!p[0]||!p[1]||!p[2])continue;arr.push({subject:p[0],unit:'导入',q:p[1],a:p[2],exp:p[3]||''});n++;}
+    }
     if(!n){toast('没有识别到有效题目，格式应为：科目 | 题目 | 答案 | 解析');return;}
     store.set('customQ',arr);toast('已导入 '+n+' 题');renderBank();return;
   }
@@ -1832,14 +2077,14 @@ document.addEventListener('click',function(e){
   if(e.target.closest('#chatSend')){sendChat();return;}
   if(e.target.closest('.aiModeChip')){aiMode=e.target.closest('.aiModeChip').dataset.m;renderAI();return;}
   if(e.target.closest('#aiGear')){aiSetOpen=!aiSetOpen;renderAI();return;}
-  if(e.target.closest('#taskAdd')){if(holidayOn(todayISO())){toast('假期轻松模式：不加新任务');return;}const v=($('#taskInput')?$('#taskInput').value:'').trim();if(!v)return;const t=getTasks();t.push({id:Date.now(),text:v,done:false,steps:null,open:false});saveTasks(t);refreshTaskCards();return;}
+  if(e.target.closest('#taskAdd')){if(holidayOn(todayISO())){toast('假期轻松模式：不加新任务');return;}const v=($('#taskInput')?$('#taskInput').value:'').trim();if(!v)return;const t=getTasks();t.push({id:Date.now(),text:v,done:false,steps:null,open:false,src:'用户输入'});saveTasks(t);refreshTaskCards();return;}
   const tdel=e.target.closest('.taskDel');
   if(tdel){const t=getTasks();t.splice(+tdel.dataset.i,1);saveTasks(t);refreshTaskCards();return;}
   const accB=e.target.closest('.accBtn');
   const accR=e.target.closest('[data-acc]');
   if(accB||accR){const i=+(accB?accB.dataset.i:accR.dataset.acc);const t=getTasks();if(t[i]){t[i].open=!t[i].open;saveTasks(t);refreshTaskCards();}return;}
   if(e.target.closest('#scheduleBtn')){stage1Understand();return;}
-  if(e.target.closest('#schedConfirm1')){stage2Schedule(false);return;}
+  if(e.target.closest('#schedConfirm1')){applyChanges(pendingIntents);pendingIntents=[];stage2Schedule(false);return;}
   if(e.target.closest('#schedEdit1')){schedEdit1();return;}
   if(e.target.closest('#snapCjBtn')){snapCJ();return;}
   if(e.target.closest('#cjCancelBtn')){cjPending=null;refreshTaskCards();return;}
@@ -1877,7 +2122,15 @@ document.addEventListener('click',function(e){
   const edel=e.target.closest('.examDel');
   if(edel){store.set('exams',getExams().filter(x=>x.id!==+edel.dataset.id));renderTools();return;}
   if(e.target.closest('#satPlanOk')){const lines=($('#satDraft')?$('#satDraft').value:'').split(/\n+/).map(function(x){return x.trim();}).filter(Boolean);if(!lines.length){toast('内容为空');return;}store.set('satplan',{week:weekKeyOf(new Date()),items:lines});closeModal();toast('已存入周六视图');return;}
-  if(e.target.closest('#wkCancel')||e.target.closest('#wkCancel2')||e.target.closest('#wkCancel3')){closeModal();return;}
+  if(e.target.closest('#wkCancel')||e.target.closest('#wkCancel2')||e.target.closest('#wkCancel3')||e.target.closest('#wkCancel4')){closeModal();return;}
+  if(e.target.closest('#intentOk')){
+    const n=applyChanges(pendingChatChanges);
+    pendingChatChanges=null;
+    closeModal();
+    pushChat('assistant','已执行 '+n+' 项变更','chat');
+    renderAI();
+    return;
+  }
   if(e.target.closest('#adjLeave')){addAdjust('今日请假：晚间 Block 顺延，身体第一，明日恢复');RENDERERS[currentTab]();return;}
   if(e.target.closest('#adjEarly')){addAdjust('今日提前睡：21:00 收工，睡前阅读取消，优先保证睡眠');RENDERERS[currentTab]();return;}
   if(e.target.closest('#adjDebt')){addAdjust('欠账待记：请补记今天没完成的内容');switchTab('sec-debt');return;}
@@ -1949,11 +2202,23 @@ document.addEventListener('change',function(e){
 
 /* ================= 启动 ================= */
 buildNav();
+if(dayCut()){
+  const d0=new Date();
+  toast('已切换到 '+(d0.getMonth()+1)+'月'+d0.getDate()+'日');
+}
 const initTab=(location.hash||'#sec-home').slice(1);
 switchTab(document.getElementById(initTab)?initTab:'sec-home',false);
 restoreTimer();
 checkMonthlyPrompt();
 weeklyAutoCheck();
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden)return;
+  if(dayCut()){
+    const d1=new Date();
+    toast('已切换到 '+(d1.getMonth()+1)+'月'+d1.getDate()+'日');
+    if(RENDERERS[currentTab])RENDERERS[currentTab]();
+  }
+});
 </script>
 </body>
 </html>

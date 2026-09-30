@@ -153,6 +153,7 @@ main{padding-bottom:120px}
 .stepRow{display:flex;align-items:center;gap:10px;padding:6px 0 6px 12px;border-left:2px solid var(--line2);margin-left:6px}
 .taskTxt.doneT{text-decoration:line-through;opacity:.5}
 .hintStrip{background:var(--white);color:#0a0a0a;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:700;margin-bottom:10px}
+.diBox{min-height:60px;font-size:14px;margin-top:2px}
 .accHd{width:100%;background:transparent;border:none;color:var(--text);text-align:left;font-size:17px;font-weight:800;padding:12px 8px;min-height:52px;cursor:pointer;font-family:inherit}
 .accBody{max-height:0;overflow:hidden;transition:max-height .3s ease;padding:0 6px}
 .accBody.open{max-height:4000px}
@@ -179,11 +180,16 @@ main{padding-bottom:120px}
     <div id="timerLabel"></div>
     <div id="timerDigits">25:00</div>
     <div class="timerRow">
+      <button class="btn btn-sm btn-ghost" id="timerMinus">−5 分</button>
+      <button class="btn btn-sm btn-ghost" id="timerSet">改时间</button>
+      <button class="btn btn-sm btn-ghost" id="timerPlus">+5 分</button>
+    </div>
+    <div class="timerRow">
       <button class="btn btn-ghost" id="timerPause">暂停</button>
       <button class="btn btn-ghost" id="timerMinimize">收起胶囊</button>
       <button class="btn btn-red" id="timerCancel">取消</button>
     </div>
-    <div class="hint">倒计时结束会响铃；点击右下角胶囊可回到本页</div>
+    <div class="hint">倒计时结束会响铃；点击右下角胶囊可回到本页，±5 分或直接改剩余时长</div>
   </div>
   <div class="timerBox hidden" id="timerDone">
     <div style="font-size:44px;font-weight:900;color:var(--white)">时间到</div>
@@ -230,6 +236,21 @@ document.addEventListener('keydown',e=>{
     saveTasks(t);refreshTaskCards();
   }
 });
+let diTimer=null;
+document.addEventListener('input',function(e){
+  if(!e.target.classList||!e.target.classList.contains('diBox'))return;
+  clearTimeout(diTimer);
+  diTimer=setTimeout(function(){
+    const d=store.get('dayinputs',{});
+    const cur=d[todayISO()]||{homework:'',review:'',other:'',schedule:''};
+    cur.homework=($('#diHomework')?$('#diHomework').value:'');
+    cur.review=($('#diReview')?$('#diReview').value:'');
+    cur.other=($('#diOther')?$('#diOther').value:'');
+    cur.schedule=($('#diSchedule')?$('#diSchedule').value:'');
+    d[todayISO()]=cur;
+    store.set('dayinputs',d);
+  },600);
+});
 
 /* ================= 提示音（Web Audio API） ================= */
 let actx=null;
@@ -268,6 +289,28 @@ function pauseTimer(){
   if(!TM.paused){TM.paused=true;TM.left=TM.endAt-Date.now();$('#timerPause').textContent='继续';}
   else{TM.paused=false;TM.endAt=Date.now()+TM.left;store.set('timer',{endAt:TM.endAt,label:TM.label,key:TM.key});$('#timerPause').textContent='暂停';}
 }
+function adjustTimer(deltaMin){
+  if(!TM.endAt)return;
+  const delta=deltaMin*60000;
+  if(TM.paused){
+    TM.left=Math.max(60000,TM.left+delta);
+    TM.endAt=Date.now()+TM.left;
+  }else{
+    TM.endAt=Math.max(Date.now()+60000,TM.endAt+delta);
+    TM.left=TM.endAt-Date.now();
+  }
+  store.set('timer',{endAt:TM.endAt,label:TM.label,key:TM.key});
+  tick();
+}
+function setTimerMinutes(min){
+  if(!TM.endAt||!(min>0))return;
+  min=Math.min(600,Math.round(min));
+  TM.left=min*60000;
+  TM.endAt=Date.now()+TM.left;
+  store.set('timer',{endAt:TM.endAt,label:TM.label,key:TM.key});
+  tick();
+  toast('已改为剩余 '+min+' 分钟');
+}
 function cancelTimer(){
   if(TM.iv)clearInterval(TM.iv);
   Object.assign(TM,{endAt:0,iv:null,paused:false,key:null});
@@ -284,7 +327,16 @@ function finishTimer(){
   store.set('timer',null);playAlarm();
   const doneKey=TM.key,label=TM.label;
   Object.assign(TM,{endAt:0,iv:null,paused:false,key:null});
-  if(doneKey)markDone(doneKey);
+  if(doneKey&&String(doneKey).indexOf('task:')===0){
+    const t=getTasks();
+    const item=t.find(function(x){return String(x.id)===String(doneKey.slice(5));});
+    if(item){
+      item.done=true;saveTasks(t);
+      const k=freqKind(item.text);
+      if(k)bumpFreq(k);
+      if(currentTab==='sec-checkin')renderCheckin();
+    }
+  }else if(doneKey)markDone(doneKey);
   document.title='学习助手';
   capHide();
   $('#timerDigits').textContent='00:00';
@@ -315,6 +367,17 @@ $('#doneClose').addEventListener('click',hideTimerDone);
 $('#doneNextBtn').addEventListener('click',()=>{if(pendingNext){const n=pendingNext;hideTimerDone();startTimer(n.min||25,n.title,n.key);}});
 $('#timerCap').addEventListener('click',timerFullOpen);
 $('#timerMinimize').addEventListener('click',timerFullClose);
+$('#timerMinus').addEventListener('click',()=>adjustTimer(-5));
+$('#timerPlus').addEventListener('click',()=>adjustTimer(5));
+$('#timerSet').addEventListener('click',()=>{
+  const left=TM.paused?TM.left:(TM.endAt-Date.now());
+  const cur=Math.max(1,Math.round(left/60000));
+  const v=prompt('输入新的剩余分钟数',String(cur));
+  if(v===null)return;
+  const min=parseInt(v,10);
+  if(!isNaN(min)&&min>0)setTimerMinutes(min);
+  else toast('无效输入');
+});
 
 /* ================= 打卡存储 ================= */
 function getDone(){const all=store.get('done',{});return all[todayISO()]||{};}
@@ -401,15 +464,30 @@ function dayRate(iso){
     const f=rec.fixed||[];
     const total=t.length+f.length;
     if(!total)return null;
-    return{done:t.filter(function(x){return x.done;}).length+f.filter(function(x){return x.done;}).length,total:total};
+    const done=t.reduce(function(a,x){return a+(x.done?1:((x.progress||0)/100));},0)+f.filter(function(x){return x.done;}).length;
+    return{done:done,total:total};
   }
   const m={};
-  getTasks().forEach(function(t){if(!t.cancelled)m[t.text]=!!t.done;});
+  getTasks().forEach(function(t){if(!t.cancelled)m[t.text]=t.done?1:((t.progress||0)/100);});
   const c=getCheckins()[iso]||{};
   getFixedItems().forEach(function(t,idx){if(!(t in m))m[t]=!!c[idx];});
   const keys=Object.keys(m);
   if(!keys.length)return null;
-  return{done:keys.filter(function(k){return m[k];}).length,total:keys.length};
+  return{done:keys.reduce(function(a,k){return a+m[k];},0),total:keys.length};
+}
+/* ---- 每日完成率表格 ---- */
+function tableRowsNow(){
+  const plan=getPlan();const quadOf={};
+  if(plan)plan.items.forEach(function(it){quadOf[it.task]=it.quad||'○';});
+  return getTasks().map(function(t){
+    const st=t.cancelled?'已取消':(t.done?'完成':((t.progress||0)>0?('进度 '+t.progress+'%'):'未完成'));
+    return{task:t.text,st:st,quad:quadOf[t.text]||'○'};
+  });
+}
+function tableHtml(rows,foot){
+  return '<table class="planTbl"><tr><th>任务名</th><th>状态</th><th>象限</th></tr>'
+    +rows.map(function(r){return '<tr><td>'+esc(r.task)+'</td><td>'+esc(r.st)+'</td><td>'+esc(r.quad)+'</td></tr>';}).join('')
+    +'</table>'+(foot?'<div class="muted" style="margin-top:6px">'+foot+'</div>':'');
 }
 function weekPct(){
   const now=new Date();const dow=now.getDay()||7;
@@ -449,31 +527,32 @@ function renderCheckin(){
   const plan=getPlan();
   const quadOf={};
   if(plan)plan.items.forEach(function(it){quadOf[it.task]=it.quad||'○';});
-  const ctc=store.get('checkin_tasks',{});
   const myTasks=getTasks();
+  const fq=getFreq();const rules=getRules();
+  const freqLine=Object.keys(rules.items).filter(function(k){return rules.items[k].track;}).map(function(k){return k+' '+fq[k]+'/'+rules.items[k].quota;}).join(' · ');
   const dynRows=myTasks.length?myTasks.map(function(t){
-    const on=ctc[t.id]?'checked':'';
-    const ctag=t.cancelled?' <span class="tag">已取消</span>':'';
-    return '<div class="debtRow'+(t.cancelled?' done':'')+'"><label class="chk"><input type="checkbox" class="ctChk" data-id="'+t.id+'" '+on+' '+(t.cancelled?'disabled':'')+'><span></span></label><div class="grow" style="font-size:16px'+(t.cancelled?';text-decoration:line-through;opacity:.5':'')+'">'+esc(t.text)+ctag+' <span class="tag">'+esc(quadOf[t.text]||'○')+'</span></div></div>';
+    const on=t.done?'checked':'';
+    const tag=t.cancelled?'<span class="tag">已取消</span>':(t.deferred?'<span class="tag" style="color:var(--white)">延期完成</span>':(t.done?'<span class="tag">已完成</span>':((t.progress||0)>0?'<span class="tag" style="color:var(--white)">进度 '+t.progress+'%</span>':'')));
+    return '<div class="debtRow'+(t.done?' done':'')+'"><label class="chk"><input type="checkbox" class="ctChk" data-id="'+t.id+'" '+on+' '+(t.cancelled?'disabled':'')+'><span></span></label>'
+      +'<div class="grow taskTxt'+(t.done?' doneT':'')+'" style="font-size:16px'+(t.cancelled?';text-decoration:line-through;opacity:.5':'')+'">'+esc(t.text)+' '+tag+' <span class="tag">'+esc(quadOf[t.text]||'○')+'</span></div></div>';
   }).join(''):'<p class="muted">暂无任务，去今日页添加或让 AI 排程</p>';
-  const now=new Date();const dow=now.getDay()||7;
-  const mon=new Date(now);mon.setDate(now.getDate()-dow+1);
-  let rows='';
-  for(let i=0;i<7;i++){
-    const d=new Date(mon);d.setDate(mon.getDate()+i);
-    const iso=isoOf(d);const r=dayRate(iso);
-    const p=r?Math.round(r.done/r.total*100):0;
-    rows+='<div style="display:flex;align-items:center;gap:10px;margin:8px 0">'
-      +'<span style="min-width:96px;font-weight:'+(iso===todayISO()?'800':'400')+';color:'+(iso===todayISO()?'var(--white)':'inherit')+'">'+DN[(d.getDay())]+' '+iso.slice(5)+'</span>'
-      +'<div class="bar" style="flex:1"><i style="width:'+p+'%"></i></div>'
-      +'<span class="muted" style="min-width:52px;text-align:right">'+(r?r.done+'/'+r.total:'—')+'</span></div>';
-  }
+  const r0=dayRate(todayISO());
+  const rate0=r0?Math.round(r0.done/r0.total*100)+'%':'—';
+  const comment0=((store.get('daycomment',{})||{})[todayISO()])||'';
+  const weekKey=weekKeyOf(new Date());
+  const saved=((store.get('weektables',{})||{})[weekKey])||[];
+  const savedHtml=saved.slice().sort(function(a,b){return a.date<b.date?-1:1;}).map(function(d){
+    return '<h3 style="margin-top:12px">'+esc(d.date)+' · 完成率 '+esc(d.rate)+'</h3>'+tableHtml(d.rows||[],d.comment?('评语：'+d.comment):'');
+  }).join('')||'<p class="muted">本周暂无历史日表格</p>';
   el.innerHTML='<div class="card row"><div><h2>每日打卡</h2><div class="muted">'+todayISO()+' · 每天至少完成一项即算打卡成功</div>'
     +'<div class="btn-row" style="margin:8px 0 0"><button class="btn btn-sm" id="wkOpen">本周复盘</button></div></div>'
     +'<div class="center"><div class="bigNum" id="streakNum">'+streakDays()+'</div><div class="muted">连续坚持（天）</div></div></div>'
     +fixedCard
-    +'<div class="card"><h3>今日任务</h3>'+dynRows+'</div>'
-    +'<div class="card"><h3>本周完成率：'+weekPct()+'%</h3>'+rows+'</div>';
+    +'<div class="card"><h3>今日任务</h3>'+(freqLine?'<p class="muted" style="margin-top:0">本周目标：'+esc(freqLine)+'</p>':'')+dynRows+'</div>'
+    +'<div class="card"><h3>今日完成率表</h3>'+tableHtml(tableRowsNow(),'当日完成率：'+rate0)
+    +'<div id="dayComment" class="muted" style="margin-top:6px">'+esc(comment0)+'</div>'
+    +'<div class="btn-row"><button class="btn btn-sm btn-ghost" id="dayCommentBtn">AI 当日评语</button></div></div>'
+    +'<div class="card"><h3>本周完成率：'+weekPct()+'%</h3>'+savedHtml+'</div>';
 }
 
 /* ================= 欠账模块 ================= */
@@ -881,7 +960,8 @@ function chatSystemPrompt(){
   const holNote=hol.length?('未来 14 天假期：'+hol.join('；')+'。'):'未来 14 天无假期。';
   const todayHol=holidayOn(todayISO());
   return '你是深圳贝塞斯（BASIS）国际学校学生的学习助手。学生背景：就读深圳贝塞斯；课表成绩：历史 B、文学 D、生物 B+、语言 B-、数学 B、经济 B；GPA 目标 3.8-4.0。今日（'+todayISO()+'，'+DN[day]+'）'+sched+'。'+holNote+(todayHol?('今天是假期（'+todayHol+'），轻松模式：任务量减半、不加新任务。'):'')
-    +'排程优先级（从高到低）：0. 用户当次输入（原文原样，不改写措辞），覆盖一切；1. 三天内固定考试+明天截止的作业；2. 科目权重（文学>经济>历史>语言>数学>生物）；3. 耗时短先；4. 欠账（旧账优先还）。用户未输入新内容时才使用第 1-4 层。'
+    +GRADE+GLOSSARY+LEVELS+'象限判定：‼️=明天要考试等大程度影响成绩的事；作业严格来说不算紧急，当天考试少或复习进度快时可提级。'
+    +rulesText()
     +'请用中文简洁回答，给出具体可执行的学习建议；分析成绩时结合 GPA 目标。';
 }
 function gradeSystemPrompt(){
@@ -891,6 +971,11 @@ function gradeSystemPrompt(){
 let pendingChatChanges=null;
 let pendingIntents=[];
 function classifyIntent(text){
+  if(/一半|\d+%|\d+成|部分完成|做了大半|做了小半|过半/.test(text))return 'progress';
+  if(/修改规则|删除规则|不追踪|取消追踪|以后没有通勤|没有通勤了|office\s*取消|取消\s*office|quizlet 的时间删掉|quizlet时间删掉|quizlet 改到|quizlet 改回自由/.test(text))return 'rules';
+  if(/不设截止|删除.{0,12}(时间|截止)|的时间删掉|占用删掉/.test(text))return 'deltime';
+  if(/due|截止|ddl/i.test(text)&&/什么时候|哪天|何时|what time|几号/.test(text))return 'dueq';
+  if(/due|截止|ddl/i.test(text)&&/周[一二三四五六日天]|明天|后天|大后天|\d{4}[-年./]\d{1,2}|\d{1,2}\s*月\s*\d{1,2}/.test(text))return 'duedate';
   if(/不是.{1,20}是|改成叫|说错了|名字写错了/.test(text))return 'fix';
   if(/改到|延期|推迟|往后挪|挪到/.test(text))return 'reschedule';
   if(/考完了|交[了作业完]*了|做完了|完成了|搞定了/.test(text))return 'complete';
@@ -902,8 +987,133 @@ function relDate(w){
   const d=new Date();
   if(w==='明天')d.setDate(d.getDate()+1);
   else if(w==='后天')d.setDate(d.getDate()+2);
-  else{const map={'周一':1,'周二':2,'周三':3,'周四':4,'周五':5,'周六':6,'周日':0,'周天':0};const t=map[w];if(t!==undefined){let a=(t-d.getDay()+7)%7;if(a===0)a=7;d.setDate(d.getDate()+a);}}
+  else if(w==='大后天')d.setDate(d.getDate()+3);
+  else{
+    const map={'周一':1,'周二':2,'周三':3,'周四':4,'周五':5,'周六':6,'周日':0,'周天':0};
+    const m=w.match(/下周（周[一二三四五六日天]）/);
+    const key=m?m[1]:w;
+    const t=map[key];
+    if(t!==undefined){let a=(t-d.getDay()+7)%7;if(a===0)a=7;if(m)a+=7;d.setDate(d.getDate()+a);}
+  }
   return isoOf(d);
+}
+function dateCN(s){
+  if(!s)return s;
+  const isoM=String(s).match(/(\d{4})-(\d{2})-(\d{2})/);
+  if(isoM)return(+isoM[2])+'月'+(+isoM[3])+'日';
+  const w=String(s).match(/大后天|后天|明天|今天|下周周[一二三四五六日天]|周[一二三四五六日天]/);
+  if(w){
+    if(w[0]==='今天')return'今天（'+(+todayISO().slice(5,7))+'月'+(+todayISO().slice(8,10))+'日）';
+    const d=relDate(w[0]);
+    return w[0]+'（'+(+d.slice(5,7))+'月'+(+d.slice(8,10))+'日）';
+  }
+  return s;
+}
+function parseBusy(text){
+  const out=[];
+  const re=/(\d{1,2})(?:[:：](\d{2}))?\s*[-–—~到至]\s*(\d{1,2})(?:[:：](\d{2}))?/g;
+  let m;
+  while((m=re.exec(text||''))!==null){
+    const s=+m[1];const e=+m[3];
+    if(s>=6&&s<=23&&e>s&&e<=24)out.push({start:pad(s)+':'+(m[2]||'00'),end:pad(e)+':'+(m[4]||'00')});
+  }
+  return out;
+}
+function busyToday(){
+  const b=store.get('busy',{});
+  return b[todayISO()]||[];
+}
+function normalizePlan(list){
+  const hard=parseScheduleLines(dayInputs().schedule||'').ok;
+  const busy=busyToday();
+  /* a. 合法性：补齐/修正 start/end */
+  const items=(list||[]).map(function(it){
+    const o=Object.assign({},it);
+    o.minutes=Math.max(5,+o.minutes||30);
+    const sm=/^(\d{1,2}):(\d{2})$/.exec(String(o.start||''));
+    const em=/^(\d{1,2}):(\d{2})$/.exec(String(o.end||''));
+    if(sm&&em){
+      const s=pad(+sm[1])+':'+sm[2];const e=pad(+em[1])+':'+em[2];
+      if(minOf(s)<minOf(e)){o.start=s;o.end=e;o.minutes=minOf(e)-minOf(s);return o;}
+    }
+    o.start='';o.end='';
+    return o;
+  });
+  /* b. 硬约束钉回 */
+  hard.forEach(function(h){
+    let it=items.filter(function(x){return x.task.indexOf(h.task)>=0||h.task.indexOf(x.task)>=0;})[0];
+    if(!it){it={task:h.task,quad:'◆',steps:[],doneFrom:null};items.push(it);}
+    it.start=h.start;it.end=h.end;it.minutes=minOf(h.end)-minOf(h.start);
+  });
+  /* 睡前阅读必须出现 */
+  if(!items.some(function(x){return x.task.indexOf('睡前阅读')>=0;})){
+    items.push({task:'睡前阅读',start:'21:30',end:'22:00',minutes:30,quad:'◆',steps:[],doneFrom:null});
+  }
+  const pinned=items.filter(function(x){
+    return x.task.indexOf('睡前阅读')>=0||hard.some(function(h){return x.start===h.start&&x.end===h.end;});
+  });
+  let free=items.filter(function(x){return pinned.indexOf(x)<0;});
+  /* c+d. 排序推平 + 绕 busy + 红线 */
+  free.sort(function(a,b){return (a.start?minOf(a.start):9999)-(b.start?minOf(b.start):9999);});
+  let cursor=17*60+10;
+  const laid=[];
+  free.forEach(function(it){
+    let s=it.start?minOf(it.start):cursor;
+    if(s<cursor)s=cursor;
+    let moved=true;
+    while(moved){
+      moved=false;
+      for(const b of busy){
+        const bs=minOf(b.start);const be=minOf(b.end);
+        if(s<be&&s+(+it.minutes)>bs){s=be;moved=true;}
+      }
+    }
+    if(s+(+it.minutes)>22*60){
+      it.minutes=Math.max(10,22*60-s);
+      it.task=it.task+'（已压缩，余量挪到次日）';
+    }
+    it.start=timeOf(s);it.end=timeOf(s+(+it.minutes));
+    cursor=minOf(it.end);
+    laid.push(it);
+  });
+  /* 与钉死项重叠再推 */
+  const finals=pinned.slice();
+  laid.forEach(function(it){
+    let s=minOf(it.start);
+    finals.forEach(function(f){
+      if(s<minOf(f.end)&&minOf(it.end)>minOf(f.start))s=minOf(f.end);
+    });
+    if(s>=22*60){it.minutes=10;it.task=it.task+'（仅保底，建议取消或挪明日）';}
+    if(s+(+it.minutes)>22*60){it.minutes=Math.max(10,22*60-s);it.task=it.task+'（已压缩，余量挪到次日）';}
+    it.start=timeOf(s);it.end=timeOf(s+(+it.minutes));
+    finals.push(it);
+  });
+  finals.sort(function(a,b){return minOf(a.start)-minOf(b.start);});
+  /* e. 同科目相邻合并（锚点项不参与合并） */
+  const merged=[];
+  finals.forEach(function(it){
+    const last=merged[merged.length-1];
+    const anchor=/睡前阅读|quizlet|membean|office|休息|通勤/.test((last?last.task:'')+it.task);
+    if(!anchor&&last&&subjectOf(last.task)===subjectOf(it.task)&&minOf(it.start)===minOf(last.end)){
+      last.end=it.end;last.minutes=(+last.minutes)+(+it.minutes);last.task=last.task+'＋'+it.task;
+      return;
+    }
+    merged.push(it);
+  });
+  /* f. 上限 8 条：非 ‼️ 尾部裁剪 */
+  const trimmed=[];
+  while(merged.length>8){
+    const idx=(function(){for(let i=merged.length-1;i>=0;i--){if(merged[i].quad!=='‼️')return i;}return merged.length-1;})();
+    trimmed.push(merged[idx].task);
+    merged.splice(idx,1);
+  }
+  merged.forEach(function(it){it.slot=it.start+'-'+it.end;});
+  return{plan:merged,trimmed:trimmed};
+}
+function fixBusyConflicts(list){
+  const r=normalizePlan(list);
+  list.length=0;
+  r.plan.forEach(function(x){list.push(x);});
 }
 function parseDateFrom(text){
   const isoM=text.match(/(\d{4})[-年./](\d{1,2})[-月./](\d{1,2})/);
@@ -917,7 +1127,49 @@ function buildChanges(text){
   const tasks=getTasks();
   const subs=SUBJ_NAMES.filter(function(s){return text.indexOf(s)>=0;});
   function matchTasks(){return tasks.filter(function(t){return !t.done&&!t.cancelled&&subs.some(function(s){return t.text.indexOf(s)>=0;});});}
-  if(cls==='complete'){
+  if(/今天.{0,8}考/.test(text)&&subs.length){
+    subs.forEach(function(s){changes.push({type:'examToday',label:'今日考试插入计划首位：'+s,subject:s});});
+    return{cls:'todayExam',changes:changes,subs:subs,complete:true};
+  }
+  if(cls==='rules'){
+    const r=getRules();
+    const tm=/不追踪\s*([A-Za-z一-龥+-]+)/.exec(text);
+    if(tm){const key=tm[1].toLowerCase();if(r.items[key])changes.push({type:'ruleTrackOff',label:'项目删除：停止追踪 '+key+'（不再排程与计数）',key:key});else changes.push({type:'none',label:'未找到追踪项 '+key});}
+    if(/没有通勤|取消通勤/.test(text))changes.push({type:'ruleNoCommute',label:'项目删除：永久取消通勤学习（固定模块移除）'});
+    if(/office\s*取消|取消\s*office|今天没有 office|今天 office 不上/.test(text))changes.push({type:'officeOff',label:'时间删除：今日 office 取消（仅今天生效，该时段变为通勤学习）'});
+    if(/quizlet 的时间删掉|quizlet时间删掉|quizlet 改回自由|quizlet 自由排/.test(text))changes.push({type:'quizletTimeClear',label:'时间删除：quizlet 默认时间删掉（恢复自由排布）'});
+    const qm=/quizlet 改到\s*(\d{1,2})[:：点时]?(\d{0,2})/.exec(text);
+    if(qm&&!/删掉|自由/.test(text))changes.push({type:'quizletTimeSet',label:'quizlet 默认时间改为 '+pad(+qm[1])+':'+(qm[2]||'00'),time:pad(+qm[1])+':'+(qm[2]||'00')});
+    if(!changes.length)changes.push({type:'ruleAppend',label:'规则修改：新增附加规则「'+text+'」',text:text});
+  }else if(cls==='dueq'){
+    matchTasks().forEach(function(t){
+      const m=t.text.match(/（截止[:：]([^）]*)）/);
+      changes.push({type:'dueInfo',label:t.text.replace(/（截止[:：][^）]*）/,'')+'：'+(m?dateCN(m[1]):'未设截止'),taskId:t.id});
+    });
+    getExams().forEach(function(e){if(subs.indexOf(e.subject)>=0&&(!e.status||e.status==='待考'))changes.push({type:'dueInfo',label:'考试 '+e.subject+'：'+dateCN(e.date),examId:e.id});});
+    if(!changes.length)changes.push({type:'none',label:'未找到带截止信息的任务或考试'});
+  }else if(cls==='duedate'){
+    const date=parseDateFrom(text);
+    if(!date)changes.push({type:'none',label:'未能识别截止日期'});
+    else matchTasks().forEach(function(t){changes.push({type:'taskDue',label:'设置截止：'+t.text.replace(/（截止[:：][^）]*）/,'')+' → '+dateCN(date),taskId:t.id,date:date});});
+  }else if(cls==='deltime'){
+    if(/占用/.test(text)){
+      parseBusy(text).forEach(function(b){changes.push({type:'busyDel',label:'删除占用 '+b.start+'-'+b.end,start:b.start,end:b.end});});
+    }
+    if(/不设截止|删除.{0,12}截止/.test(text)){
+      matchTasks().forEach(function(t){changes.push({type:'taskStripDue',label:'移除截止标签：'+t.text,taskId:t.id});});
+    }
+    if(/时段|时间/.test(text)&&!/截止|占用/.test(text)){
+      matchTasks().forEach(function(t){changes.push({type:'planSlotClear',label:'清除时段要求：'+t.text,task:t.text});});
+    }
+    if(!changes.length)changes.push({type:'none',label:'未识别要删除的时间信息'});
+  }else if(cls==='progress'){
+    let pct=50;
+    const pm=text.match(/(\d+)%/);const pc=text.match(/(\d+)成/);
+    if(pm)pct=Math.min(100,+pm[1]);else if(pc)pct=Math.min(100,+pc[1]*10);
+    else if(/大半|过半/.test(text))pct=70;else if(/小半/.test(text))pct=30;
+    matchTasks().forEach(function(t){changes.push({type:'taskProgress',label:'进度 '+pct+'%：'+t.text,taskId:t.id,progress:pct});});
+  }else if(cls==='complete'){
     matchTasks().forEach(function(t){changes.push({type:'taskDone',label:'完成任务：'+t.text,taskId:t.id});});
     getExams().forEach(function(e){if(subs.indexOf(e.subject)>=0&&(!e.status||e.status==='待考'))changes.push({type:'examDone',label:'标记已考：'+e.subject+' '+(e.date||''),examId:e.id});});
   }else if(cls==='cancel'){
@@ -938,7 +1190,8 @@ function buildChanges(text){
       getExams().forEach(function(e){if(e.subject===from)changes.push({type:'examFix',label:'修正考试科目：'+from+' → '+to,examId:e.id,to:to});});
     }else changes.push({type:'none',label:'未能识别修正内容'});
   }
-  return{cls:cls,changes:changes};
+  const complete=subs.every(function(s){return changes.some(function(c){return c.label&&c.label.indexOf(s)>=0;});});
+  return{cls:cls,changes:changes,subs:subs,complete:complete};
 }
 function applyChanges(changes){
   let n=0;
@@ -952,6 +1205,26 @@ function applyChanges(changes){
     else if(c.type==='examCancel'){const e=exams.find(function(x){return x.id===c.examId;});if(e){e.status='已取消';n++;}}
     else if(c.type==='examMove'){const e=exams.find(function(x){return x.id===c.examId;});if(e){e.date=c.date;if(!e.status)e.status='待考';n++;}}
     else if(c.type==='examFix'){const e=exams.find(function(x){return x.id===c.examId;});if(e){e.subject=c.to;n++;}}
+    else if(c.type==='taskDue'){const t=tasks.find(function(x){return x.id===c.taskId;});if(t){t.text=t.text.replace(/（截止[:：][^）]*）/g,'')+'（截止：'+c.date+'）';n++;}}
+    else if(c.type==='taskStripDue'){const t=tasks.find(function(x){return x.id===c.taskId;});if(t){t.text=t.text.replace(/（截止[:：][^）]*）/g,'');n++;}}
+    else if(c.type==='busyDel'){const bm=store.get('busy',{});bm[todayISO()]=(bm[todayISO()]||[]).filter(function(b){return !(b.start===c.start&&b.end===c.end);});store.set('busy',bm);n++;}
+    else if(c.type==='planSlotClear'){const p=store.get('today_plan',null);if(p&&p.date===todayISO()){p.items.forEach(function(it){if(it.task.indexOf(c.task)>=0)it.slot='自由安排';});store.set('today_plan',p);}n++;}
+    else if(c.type==='ruleTrackOff'){const r=getRules();if(r.items[c.key]){r.items[c.key].track=false;saveRules(r);}n++;}
+    else if(c.type==='ruleNoCommute'){const r=getRules();r.noCommute=true;saveRules(r);n++;}
+    else if(c.type==='officeOff'){const o=store.get('office_off',{});o[todayISO()]=true;store.set('office_off',o);n++;}
+    else if(c.type==='quizletTimeClear'){store.set('quizlet_time','');n++;}
+    else if(c.type==='quizletTimeSet'){store.set('quizlet_time',c.time);n++;}
+    else if(c.type==='ruleAppend'){const r=getRules();r.text=(r.text?r.text+'\n':'')+c.text;saveRules(r);n++;}
+    else if(c.type==='taskProgress'){const t=tasks.find(function(x){return x.id===c.taskId;});if(t){t.progress=c.progress;if(c.progress>=100)t.done=true;n++;}}
+    else if(c.type==='examToday'){
+      if(c.subject&&!exams.some(function(x){return x.subject===c.subject&&x.date===todayISO();})){
+        exams.push({id:Date.now()+Math.floor(Math.random()*999),subject:c.subject,date:todayISO(),status:'待考'});
+      }
+      if(c.subject&&!tasks.some(function(x){return x.text.indexOf('今日考试：'+c.subject)>=0;})){
+        tasks.unshift({id:Date.now()+1,text:'今日考试：'+c.subject,done:false,steps:null,open:false,src:'用户输入',pin:true});
+      }
+      n++;
+    }
   });
   saveTasks(tasks);store.set('exams',exams);
   refreshTaskCards();
@@ -1005,6 +1278,19 @@ async function sendChat(){
   }
   const intent=classifyIntent(text);
   if(chatKey==='chat'&&intent!=='add'){
+    if(intent==='dueq'){
+      pushChat('user',text,'chat');
+      const bcd=buildChanges(text);
+      pushChat('assistant',bcd.changes.map(function(c){return '· '+c.label;}).join('\n'),'chat');
+      renderAI();
+      return;
+    }
+    if(intent==='rules'&&/删除|取消|不要|去掉/.test(text)&&/22:00|红线|睡前阅读|office 锁死|office 锁定/.test(text)){
+      pushChat('user',text,'chat');
+      pushChat('assistant','核心锚点不可删除：22:00 当日红线、睡前阅读 21:30-22:00、office 锁死时段是系统固定结构，已拒绝该修改并保留原规则。可修改范围：时间占用、quizlet 默认时间、每周追踪项与非锚点附加规则。','chat');
+      renderAI();
+      return;
+    }
     if(intent==='query'){
       pushChat('user',text,'chat');
       const tom=isoOf(new Date(Date.now()+86400000));
@@ -1025,6 +1311,12 @@ async function sendChat(){
       return;
     }
     pushChat('user',text,'chat');
+    if(!bc.complete){
+      const missed=bc.subs.filter(function(s){return !real.some(function(c){return c.label.indexOf(s)>=0;});});
+      pushChat('assistant','批量意图识别不完整，遗漏：'+missed.join('、')+'。请分科补充说明（漏一个视为失败，未执行任何变更）','chat');
+      renderAI();
+      return;
+    }
     pendingChatChanges=real;
     const lines=real.map(function(c){return '· '+c.label;}).join('\n');
     openModal('<h2>确认变更</h2><div class="warnBox">'+esc(lines)+'</div>'
@@ -1194,9 +1486,66 @@ function holidaysNext14(){
   return out;
 }
 const SUBJ_NAMES=['历史','生物','数学','经济','语言','文学'];
-function subjectOf(text){
-  for(const s of SUBJ_NAMES){if(text.indexOf(s)>=0)return s;}
+function getSubjects(){return store.get('subjects',{});}
+function touchSubjectFromText(text){
+  const subs=getSubjects();
+  let hit=null;
+  SUBJ_NAMES.concat(Object.keys(subs)).forEach(function(s){
+    if(s&&String(text).indexOf(s)>=0){if(hit===null||s.length>hit.length)hit=s;}
+  });
+  if(hit){subs[hit]=todayISO();store.set('subjects',subs);return hit;}
+  const m=String(text).match(/(?:^|\s)([A-Za-z][A-Za-z0-9+-]{1,9}|[一-龥]{2,4})(?=\s|作业|的|：|:|$)/);
+  if(m&&!/^(今日考试|完成|进度|晚间学习|保底|睡前阅读|学校作业|通勤|休息)$/.test(m[1])){
+    subs[m[1]]=todayISO();store.set('subjects',subs);return m[1];
+  }
   return '其他';
+}
+function subjectOf(text){return touchSubjectFromText(text);}
+/* ---- 规则指令文件 lsa_rules ---- */
+const RULES_DEFAULT={text:'',items:{quizlet:{track:true,quota:3},membean:{track:true,quota:3},readtheory:{track:true,quota:5}},noCommute:false};
+function getRules(){
+  let r=store.get('rules',null);
+  if(!r){store.set('rules',RULES_DEFAULT);r=RULES_DEFAULT;}
+  const base=JSON.parse(JSON.stringify(RULES_DEFAULT));
+  return Object.assign(base,r,{items:Object.assign({},base.items,r.items||{})});
+}
+function saveRules(r){store.set('rules',r);}
+const GLOSSARY='黑话词典：HW=homework 家庭作业；CW=classwork 课堂作业；writing=writing examination；quiz=权重低于 test 的考试；test=校内权重最高的考试（weight 指该考试在成绩中的占比）；membean=文学课单词背诵作业（15min）；quizlet=语言课单词背诵作业（15min）；office=课后辅导（16:10-17:10）；readtheory=语言课作业。';
+const GRADE='成绩档案（越弱越优先保）：文学 D＜语言 B-＜经济 B＝历史 B＝数学 B＜生物 B+。';
+const LEVELS='任务等级制度（高→低）：①昨日余出任务/欠账（每天最多占 1 个 Block）；②明天的 test（校内权重最高）；③明天的 quiz；④明天要交的作业；⑤明天不考的考试；⑥明天不交的作业。';
+function rulesText(){
+  const r=getRules();
+  let t=LEVELS
+    +'紧急（‼️）判定：基本是"明天要考试"这类大程度影响成绩的事；作业严格来说不算紧急，但当天考试少或复习进度快时可以提级。'
+    +'Block 制度：每天最多 3 个 Block，Block 只放 ‼️ 任务，每块约 1 小时（优先级 test > quiz，或用户专门指定时除外）；紧急任务超过 Block 容量时，按等级制度决断今天做哪些，余出降级处理。';
+  Object.keys(r.items).forEach(function(k){const it=r.items[k];if(it&&it.track)t+='每周目标：'+k+' 每周 '+it.quota+' 次，当周已满不再排入。';});
+  if(r.noCommute)t+='用户已声明：以后没有通勤学习。';
+  return t+(r.text?('\n附加规则：'+r.text):'');
+}
+/* ---- 每周目标频率 lsa_weekly_freq ---- */
+function freqKey(){return weekKeyOf(new Date());}
+function getFreq(){const f=store.get('weekly_freq',{});return f[freqKey()]||{membean:0,quizlet:0,readtheory:0};}
+function bumpFreq(kind){const f=store.get('weekly_freq',{});const cur=f[freqKey()]||{membean:0,quizlet:0,readtheory:0};cur[kind]=(cur[kind]||0)+1;f[freqKey()]=cur;store.set('weekly_freq',f);}
+function freqKind(text){const t=String(text);if(/quizlet/i.test(t))return'quizlet';if(/membean/i.test(t))return'membean';if(/readtheory|read theory/i.test(t))return'readtheory';return null;}
+/* ---- quizlet 默认时间 / office ---- */
+function quizletTime(){return store.get('quizlet_time','')||'07:20';}
+function officeDay(){const d=new Date().getDay();if(!(d===2||d===3))return false;const off=store.get('office_off',{});return !off[todayISO()];}
+/* ---- 时间安排输入栏解析（硬约束） ---- */
+function parseScheduleLines(text){
+  const ok=[];const bad=[];
+  String(text||'').split(/\n+/).forEach(function(raw,i){
+    const line=raw.trim();
+    if(!line)return;
+    const m=line.match(/^(\d{1,2}):(\d{2})\s*[-–—~]\s*(\d{1,2}):(\d{2})\s+(.+)$/);
+    if(!m){bad.push({n:i+1,raw:line});return;}
+    const s=+m[1]*60+(+m[2]);const e=+m[3]*60+(+m[4]);
+    if(s>=e||e>22*60||s<5*60||!m[5].trim()){bad.push({n:i+1,raw:line});return;}
+    ok.push({start:pad(+m[1])+':'+m[2],end:pad(+m[3])+':'+m[4],task:m[5].trim()});
+  });
+  return{ok:ok,bad:bad};
+}
+function scheduleWarnings(){
+  return parseScheduleLines(dayInputs().schedule||'').bad;
 }
 function refreshTaskCards(){['homeTasks','todayTasks'].forEach(function(id){const el=document.getElementById(id);if(el)el.innerHTML=tasksCardHtml();});}
 function renderTasksCard(hostId){
@@ -1205,25 +1554,33 @@ function renderTasksCard(hostId){
 }
 function planTableHtml(plan){
   const rows=plan.items.map(function(it,i){
-    return '<tr><td>'+(i+1)+'</td><td>'+esc(it.quad||'')+'</td><td>'+esc(it.task)+' <button class="btn btn-sm btn-ghost planFocus" data-min="'+(it.minutes||25)+'" data-label="'+esc(it.task)+'">专注</button></td><td>'+esc(it.slot||'')+'</td><td>'+esc(String(it.minutes||''))+' 分</td></tr>';
+    const range=(it.start&&it.end)?(it.start+'–'+it.end):(it.slot||'');
+    return '<tr><td>'+esc(range)+'</td><td>'+esc(subjectOf(it.task))+'</td><td>'+esc(it.task)+' <span class="tag">'+esc(it.quad||'')+'</span> <button class="btn btn-sm btn-ghost planFocus" data-min="'+(it.minutes||25)+'" data-label="'+esc(it.task)+'">专注</button></td><td>'+esc(String(it.minutes||''))+' 分</td></tr>';
   }).join('');
   return '<h3 style="margin-top:10px">今日计划'+(plan.status==='ended'?'（已结束）':'')+'</h3>'
-    +'<table class="planTbl"><tr><th>顺序</th><th>象限</th><th>任务</th><th>建议时段</th><th>耗时</th></tr>'+rows+'</table>';
+    +'<table class="planTbl"><tr><th>时间段</th><th>科目</th><th>任务名+象限</th><th>时长（分钟）</th></tr>'+rows+'</table>';
 }
 function planPreviewHtml(list){
   const ch=pendingChanges||{merged:0,reordered:0,kept:0,new:0};
+  const tr=pendingTradeoffs||[];
+  const trHtml=tr.length?('<div class="warnBox" style="margin-top:8px">取舍说明：'+tr.map(function(t){
+    return esc((t.level==='建议取消'?'已按成绩策略建议取消：':'已按成绩策略降级：')+t.task+'→'+t.level+(t.reason?'（'+t.reason+'）':''));
+  }).join('；')+'</div>'):'';
   const rows=list.map(function(it,i){
     const st=(it.steps&&it.steps.length)?'<div class="muted" style="font-size:12px">'+it.steps.map(esc).join(' → ')+'</div>':'';
-    return '<tr><td>'+(i+1)+'</td><td>'+esc(it.quad||'')+'</td><td>'+esc(it.task)+st+'</td><td>'+esc(it.slot||'')+'</td><td>'+esc(String(it.minutes||''))+' 分</td></tr>';
+    const range=(it.start&&it.end)?(it.start+'–'+it.end):(it.slot||'');
+    return '<tr><td>'+esc(range)+'</td><td>'+esc(subjectOf(it.task))+'</td><td>'+esc(it.task)+' <span class="tag">'+esc(it.quad||'')+'</span>'+st+'</td><td>'+esc(String(it.minutes||''))+' 分</td></tr>';
   }).join('');
   return '<h3 style="margin-top:10px">排程预览</h3>'
     +'<div class="muted">变更说明：已合并 '+ch.merged+' 条、重排 '+ch.reordered+' 条、保留 '+ch.kept+' 条、新增 '+ch.new+' 条（确认前不改任何数据）</div>'
-    +'<table class="planTbl"><tr><th>顺序</th><th>象限</th><th>任务与分解步骤</th><th>建议时段</th><th>耗时</th></tr>'+rows+'</table>'
+    +trHtml
+    +'<table class="planTbl"><tr><th>时间段</th><th>科目</th><th>任务名+象限</th><th>时长（分钟）</th></tr>'+rows+'</table>'
     +'<div class="btn-row"><button class="btn btn-green" id="planConfirm">确认执行</button><button class="btn btn-ghost" id="planReplan">重新排程</button></div>'
     +'<p class="muted" style="margin-top:6px">打卡固定项今日保留还是取消？见下方，点按钮当日生效、次日自动恢复。</p>'
     +fixedItemsHtml();
 }
 let cjPending=null;
+let lastStashCount=0;
 function tasksCardHtml(){
   const now=new Date();const nm=now.getHours()*60+now.getMinutes();const day=now.getDay();
   syncTasksFromPlan();
@@ -1241,33 +1598,37 @@ function tasksCardHtml(){
   if(nm>=21*60+50&&nm<22*60&&!archived)hint='<div class="hintStrip">花 2 分钟把明天任务发给 AI 排程</div>';
   const holidayBanner=holiday?'<div class="warnBox">今日放假（'+esc(holiday)+'）· 轻松模式：任务量减半、不加新任务、不触发 22:00 欠账</div>':'';
   if(nm>=22*60&&store.get('debtConverted')!==todayISO()&&!archived&&!holiday){
-    const left=tasks.filter(t=>!t.done&&!t.deferred&&!t.cancelled);
+    const left=tasks.filter(t=>!t.done&&!t.cancelled);
     if(left.length){
-      const slotOf={};const quadOf={};
-      if(plan)plan.items.forEach(function(it){slotOf[it.task]=it.slot||'';quadOf[it.task]=it.quad||'○';});
+      const quadOf={};
+      if(plan)plan.items.forEach(function(it){quadOf[it.task]=it.quad||'○';});
       const debts=store.get('debts',[]);
-      let n=0;
-      const urgents=[];
+      const fb=store.get('futurebox',{});
+      const tom=isoOf(new Date(Date.now()+86400000));
+      let nd=0;let nf=0;
       left.forEach(function(t,i){
-        if(quadOf[t.text]==='‼️'){urgents.push(t);return;}
-        t.done=true;
-        debts.push({id:Date.now()+i,subject:subjectOf(t.text),content:t.text+(slotOf[t.text]?'（原定：'+slotOf[t.text]+'）':''),date:todayISO(),done:false});
-        n++;
+        if(quadOf[t.text]==='‼️'){
+          t.done=true;t.src='欠账转化';
+          debts.push({id:Date.now()+i,subject:subjectOf(t.text),content:t.text,date:todayISO(),done:false});
+          nd++;
+        }else{
+          const arr=fb[tom]||(fb[tom]=[]);
+          if(!arr.some(function(x){return x.text===t.text;}))arr.push({id:Date.now()+i,text:t.text,src:'暂存'});
+          t.done=true;nf++;
+        }
       });
-      store.set('debts',debts);saveTasks(tasks);
-      if(n>0)toast('已自动记 '+n+' 笔欠账');
-      if(urgents.length)askUrgentQueue(urgents,slotOf);
-      else if(day>=1&&day<=4)archiveToday('22:00 自动红线归档：已记欠账 '+n+' 笔。');
+      store.set('debts',debts);store.set('futurebox',fb);saveTasks(tasks);
+      toast('22:00 流向处理：紧急转欠账 '+nd+' 条 · 暂存明日 '+nf+' 条');
+      if(day>=1&&day<=4)archiveToday('22:00 流向归档：欠账 '+nd+'、暂存明日 '+nf+'。');
       if(plan){plan.status='ended';store.set('today_plan',plan);}
       store.set('debtConverted',todayISO());
-      if(!urgents.length)toast('已过 22:00，剩余任务已自动记欠账，明天还');
     }
   }
   const leftN=tasks.filter(t=>!t.done&&!t.cancelled).length;
   const closedBanner=(archived)?'<div class="warnBox">今日已归档</div>':'';
   const taskRows=tasks.map(function(t,i){
     const st=(t.done||t.cancelled)?' taskTxt doneT':'';
-    const tag=t.cancelled?'<span class="tag">已取消</span>':(t.deferred?'<span class="tag" style="color:var(--white)">延期完成</span>':(t.done?'<span class="tag">已完成</span>':''));
+    const tag=t.cancelled?'<span class="tag">已取消</span>':(t.deferred?'<span class="tag" style="color:var(--white)">延期完成</span>':(t.done?'<span class="tag">已完成</span>':((t.progress||0)>0?'<span class="tag" style="color:var(--white)">进度 '+t.progress+'%</span>':'')));
     const steps=(t.steps&&t.steps.length)?('<div class="steps'+(t.open?' open':'')+'">'+t.steps.map(function(s,j){
       return '<div class="stepRow"><label class="chk" style="width:24px;height:24px"><input type="checkbox" class="stepChk" data-i="'+i+'" data-j="'+j+'" '+(s.done?'checked':'')+'><span></span></label><span'+(s.done?' class="strike"':'')+'>'+esc(s.text)+'</span></div>';
     }).join('')+'</div>'):'';
@@ -1276,6 +1637,7 @@ function tasksCardHtml(){
       +'<div class="grow taskTxt'+st+'" data-acc="'+i+'" style="cursor:pointer">'+esc(t.text)+' '+tag
       +((t.steps&&t.steps.length)?'<div class="muted" style="font-size:12px">'+(t.open?'点击收起步骤':'点击展开 '+t.steps.length+' 个步骤')+'</div>':'')
       +'</div>'
+      +((!t.done&&freqKind(t.text))?'<button class="btn btn-sm btn-ghost qbStart" data-i="'+i+'">开始 15 分</button>':'')
       +(t.steps&&t.steps.length?'<button class="btn btn-sm btn-ghost accBtn" data-i="'+i+'">'+(t.open?'收起':'步骤')+'</button>':'')
       +'<button class="btn btn-sm btn-red taskDel" data-i="'+i+'">删除</button></div>'
       +steps;
@@ -1283,10 +1645,20 @@ function tasksCardHtml(){
   const inputRow=holiday
     ?'<div class="chatInputRow"><input type="text" placeholder="假期轻松模式，不加新任务" disabled><button class="btn" disabled>添加</button></div>'
     :'<div class="chatInputRow"><input type="text" id="taskInput" placeholder="添加任务，回车确认" maxlength="100"><button class="btn" id="taskAdd">添加</button></div>';
+  const di=dayInputs();
+  const warns=scheduleWarnings();
+  const warnHtml=warns.length?('<div class="warnBox" style="margin-bottom:8px">'+warns.map(function(w){return '第 '+w.n+' 行无法识别：'+esc(w.raw);}).join('<br>')+'</div>'):'';
+  const diHtml='<div style="margin-bottom:10px">'
+    +'<label class="f">作业<textarea id="diHomework" class="diBox" maxlength="300" placeholder="例：数学 worksheet p23；经济 FRQ 1 道">'+esc(di.homework)+'</textarea></label>'
+    +'<label class="f" style="margin-top:8px">复习<textarea id="diReview" class="diBox" maxlength="300" placeholder="例：历史 SAQ 1 篇；生物错题 5 道">'+esc(di.review)+'</textarea></label>'
+    +'<label class="f" style="margin-top:8px">其他<textarea id="diOther" class="diBox" maxlength="300" placeholder="例：钢琴课 19-20 点；明天带计算器">'+esc(di.other)+'</textarea></label>'
+    +'<label class="f" style="margin-top:8px">时间安排<textarea id="diSchedule" class="diBox" maxlength="300" placeholder="例：19:30-20:30 数学；21:00-21:40 经济">'+esc(di.schedule||'')+'</textarea></label></div>';
   return '<div class="card"><div class="row"><h3>今日任务'+(leftN?'（剩 '+leftN+'）':'')+'</h3>'
     +'<div class="btn-row" style="margin:0"><button class="btn btn-sm btn-ghost" id="snapCjBtn">拍 CJ</button>'
     +'<button class="btn btn-sm btn-ghost" id="reduceBtn">减少今日任务</button>'
     +'<button class="btn btn-sm" id="scheduleBtn">发给 AI 排程</button></div></div>'
+    +diHtml
+    +warnHtml
     +hint+holidayBanner+closedBanner
     +(plan?planTableHtml(plan):'')
     +(pendingSummary?summaryHtml():'')
@@ -1295,35 +1667,6 @@ function tasksCardHtml(){
     +inputRow
     +(taskRows||'<p class="muted">今天还没有任务。每日学习由 AI 现排：点「发给 AI 排程」生成今日计划，或拍 CJ 自动识别。</p>')
     +'</div>';
-}
-function askUrgentQueue(list,slotOf){
-  const task=list[0];
-  const rest=list.slice(1);
-  openModal('<h2>紧急任务未清</h2><p>「'+esc(task.text)+'」是 ‼️ 重要紧急任务，还没完成，怎么处理？</p>'
-    +'<div class="btn-row"><button class="btn btn-ghost urgentDebt" data-id="'+task.id+'" data-slot="'+esc(slotOf[task.text]||'')+'">① 记欠账</button>'
-    +'<button class="btn urgentDefer" data-id="'+task.id+'">② 今天必须完成</button></div>');
-  $$('.urgentDebt').forEach(function(b){b.addEventListener('click',function(){
-    const t=getTasks().find(x=>x.id===+b.dataset.id);
-    if(t){t.done=true;saveTasks(getTasks());
-      const debts=store.get('debts',[]);
-      debts.push({id:Date.now(),subject:subjectOf(t.text),content:t.text+(b.dataset.slot?'（原定：'+b.dataset.slot+'）':''),date:todayISO(),done:false});
-      store.set('debts',debts);}
-    closeModal();
-    if(rest.length)askUrgentQueue(rest,slotOf);
-    else{toast('紧急任务已处理');afterRedLine();}
-  });});
-  $$('.urgentDefer').forEach(function(b){b.addEventListener('click',function(){
-    const t=getTasks().find(x=>x.id===+b.dataset.id);
-    if(t){t.deferred=true;t.deferredDate=todayISO();saveTasks(getTasks());}
-    closeModal();
-    if(rest.length)askUrgentQueue(rest,slotOf);
-    else{toast('已标记延期完成');afterRedLine();}
-  });});
-}
-function afterRedLine(){
-  const day=new Date().getDay();
-  if(day>=1&&day<=4)archiveToday('22:00 红线处理完成归档。');
-  refreshTaskCards();
 }
 /* ---- 打卡固定项：当日保留或取消 ---- */
 function fixedSkip(){const fs=store.get('fixed_skip',{});return fs[todayISO()]||[];}
@@ -1418,16 +1761,39 @@ function cjConfirm(){
 function dayCut(){
   const last=store.get('lastday');
   const today=todayISO();
-  if(last===today)return false;
+  if(last===today)return{changed:false,extra:''};
+  let extra='';
   if(last){
     const yTasks=getTasks();
+    /* 新流向：昨日未清任务 → 紧急转欠账 / 其余转今日暂存（App 昨晚未打开时的兜底） */
+    const yLeft=yTasks.filter(function(t){return !t.done&&!t.cancelled;});
+    if(yLeft.length){
+      const quadOf={};const p0=getPlan();if(p0)p0.items.forEach(function(it){quadOf[it.task]=it.quad||'○';});
+      const debts=store.get('debts',[]);const fb=store.get('futurebox',{});
+      yLeft.forEach(function(t,i){
+        if(quadOf[t.text]==='‼️'){t.done=true;debts.push({id:Date.now()+i,subject:subjectOf(t.text),content:t.text,date:last,done:false});}
+        else{const arr=fb[today]||(fb[today]=[]);if(!arr.some(function(x){return x.text===t.text;}))arr.push({id:Date.now()+i,text:t.text,src:'暂存'});t.done=true;}
+      });
+      store.set('debts',debts);store.set('futurebox',fb);
+    }
     const c=getCheckins()[last]||{};
-    const rec={tasks:yTasks.filter(function(t){return !t.cancelled;}).map(function(t){return{text:t.text,done:!!t.done,src:t.src||''};}),
+    const rec={tasks:yTasks.filter(function(t){return !t.cancelled;}).map(function(t){return{text:t.text,done:!!t.done,progress:t.progress||0,src:t.src||''};}),
       fixed:getFixedItems().map(function(t,idx){return{name:t,done:!!c[idx]};})};
     const td=store.get('taskday',{});td[last]=rec;store.set('taskday',td);
     const dl=store.get('dailylog',{});
     if(!dl[last])dl[last]={note:'日切自动归档',tasks:rec.tasks,ts:Date.now()};
     store.set('dailylog',dl);
+    /* 当日表格写入本周归档（周日不清删，整周保留） */
+    const yDone=rec.tasks.reduce(function(a,x){return a+(x.done?1:((x.progress||0)/100));},0)+rec.fixed.filter(function(f){return f.done;}).length;
+    const yTotal=rec.tasks.length+rec.fixed.length;
+    const wt=store.get('weektables',{});
+    const wkY=weekKeyOf(new Date(last+'T00:00:00'));
+    const arr=wt[wkY]||[];
+    arr.push({date:last,
+      rows:rec.tasks.map(function(t){return{task:t.text,st:(t.done?'完成':((t.progress||0)>0?'进度 '+t.progress+'%':'未完成')),quad:''};}),
+      rate:yTotal?Math.round(yDone/yTotal*100)+'%':'—',
+      comment:((store.get('daycomment',{})||{})[last])||''});
+    wt[wkY]=arr;store.set('weektables',wt);
     store.set('tasks',[]);
     store.set('today_plan',null);
     store.set('archived',null);
@@ -1440,9 +1806,28 @@ function dayCut(){
         store.set('tasks',sp.items.map(function(x,i){return{id:Date.now()+i,text:x,done:false,steps:null,open:false,src:'AI生成'};}));
       }
     }
+    /* 未来暂存库：取出今日到期任务，置顶注入 */
+    const fb=store.get('futurebox',{});
+    const due=fb[today]||[];
+    if(due.length){
+      const t=getTasks();
+      due.forEach(function(x,i){t.unshift({id:Date.now()+i,text:x.text,done:false,steps:null,open:false,src:'暂存库'});});
+      saveTasks(t);
+      fb[today]=[];
+      store.set('futurebox',fb);
+      extra='，已从暂存库取出 '+due.length+' 条今日任务';
+    }
   }
   store.set('lastday',today);
-  return true;
+  /* 科目自主清理：超 60 天未出现的自定义科目自动删除（六门核心永不删） */
+  const subs0=getSubjects();let subChanged=false;
+  Object.keys(subs0).forEach(function(k){
+    if(SUBJ_NAMES.indexOf(k)>=0)return;
+    const d=new Date((subs0[k]||today)+'T00:00:00');
+    if((Date.now()-d.getTime())>60*86400000){delete subs0[k];subChanged=true;}
+  });
+  if(subChanged)store.set('subjects',subs0);
+  return{changed:true,extra:extra};
 }
 function archiveToday(note){
   const plan=getPlan();
@@ -1454,24 +1839,36 @@ function archiveToday(note){
   store.set('archived',todayISO());
 }
 function scheduleCollect(){
-  const day=new Date().getDay();
-  const pool=[];
-  if(day===2)pool.push('Office hour（经济）');
-  if(day===3)pool.push('Office hour（文学）');
-  pool.push('学校作业','晚间学习','睡前阅读');
+  const pool=['学校作业','晚间学习'];
   return{
     pool:pool,
     tasks:getTasks().filter(t=>!t.done&&!t.cancelled).map(t=>t.text),
     debts:store.get('debts',[]).filter(d=>!d.done).map(d=>d.subject+'：'+d.content),
-    exams:getExams().map(function(e){const dt=nextExamDate(e);const days=Math.round((new Date(dt+'T00:00:00').getTime()-new Date(todayISO()+'T00:00:00').getTime())/86400000);return e.subject+' '+dt+'（'+days+' 天后）';})
+    exams:getExams().filter(e=>!e.status||e.status==='待考').map(function(e){const dt=nextExamDate(e);const days=Math.round((new Date(dt+'T00:00:00').getTime()-new Date(todayISO()+'T00:00:00').getTime())/86400000);return e.subject+' '+dt+'（'+days+' 天后）';})
   };
+}
+function yesterdayLeft(){
+  const y=isoOf(new Date(Date.now()-86400000));
+  const debts=store.get('debts',[]).filter(function(d){return !d.done&&d.date===y;});
+  const stash=(store.get('futurebox',{})[todayISO()])||[];
+  return{debts:debts,stash:stash};
 }
 /* ---- 两段式排程管道 ---- */
 let schedStage='idle';
 let pendingSummary=null;
 let pendingChanges=null;
-function schedNote(){const n=store.get('sched_note',{});return n.date===todayISO()?n.text:'';}
-function setSchedNote(t){store.set('sched_note',{date:todayISO(),text:t});}
+let pendingTradeoffs=[];
+function schedNote(){return dayInputsNote();}
+function setSchedNote(t){/* 已由三栏输入取代 */return t;}
+function dayInputs(){const d=store.get('dayinputs',{});return d[todayISO()]||{homework:'',review:'',other:'',schedule:''};}
+function dayInputsNote(){
+  const d=dayInputs();
+  const parts=['作业：'+d.homework,'复习：'+d.review,'其他：'+d.other]
+    .filter(function(s){return s.slice(3).trim();});
+  const sch=parseScheduleLines(d.schedule||'').ok;
+  if(sch.length)parts.push('时间安排（硬约束，禁止移动）：'+sch.map(function(x){return x.start+'-'+x.end+' '+x.task;}).join('；'));
+  return parts.join('／');
+}
 function syncTasksFromPlan(){
   const plan=getPlan();
   if(!plan||!plan.items||!plan.items.length)return;
@@ -1497,11 +1894,15 @@ function summaryHtml(){
   if(!sm)return'';
   function row(x,src){return '<div class="debtRow"><div class="grow">'+esc(x)+'<div class="muted" style="font-size:12px">出处：'+esc(src||'推测')+'</div></div></div>';}
   return '<div class="card" style="background:var(--bg2);margin-top:10px"><h3>理解摘要（请确认）</h3>'
-    +'<h3 style="margin-top:6px">临时考试</h3>'+(sm.exams.length?sm.exams.map(function(e){return row(e.subject+' '+e.date,e.source);}).join(''):'<p class="muted">无</p>')
-    +'<h3>作业截止分组</h3>'+(sm.dueGroups.length?sm.dueGroups.map(function(g){return row(g.due+'：'+g.subjects.join('、'),g.source);}).join(''):'<p class="muted">无</p>')
+    +'<h3 style="margin-top:6px">临时考试</h3>'+(sm.exams.length?sm.exams.map(function(e){return row(e.subject+' '+dateCN(e.date),e.source);}).join(''):'<p class="muted">无</p>')
+    +'<h3>作业截止分组</h3>'+(sm.dueGroups.length?sm.dueGroups.map(function(g){return row(dateCN(g.due)+'：'+g.subjects.join('、'),g.source);}).join(''):'<p class="muted">无</p>')
     +'<h3>任务清单</h3>'+(sm.tasks.length?sm.tasks.map(function(t){return row('['+t.subject+'] '+t.text,t.source);}).join(''):'<p class="muted">无</p>')
     +(pendingIntents.length?'<h3>变更清单（确认后执行）</h3>'+pendingIntents.map(function(c){return '<div class="debtRow"><div class="grow">'+esc(c.label)+'</div></div>';}).join(''):'')
+    +(function(){const yL=yesterdayLeft();return (yL.debts.length||yL.stash.length)?('<h3>昨日延续（点「理解正确，开始排程」即确认继续）</h3>'
+      +yL.debts.map(function(d){return '<div class="debtRow"><span class="tag">欠账</span><div class="grow">'+esc(d.content)+'</div></div>';}).join('')
+      +yL.stash.map(function(x){return '<div class="debtRow"><span class="tag">暂存</span><div class="grow">'+esc(x.text)+'</div></div>';}).join('')):'';})()
     +((sm.speculative&&sm.speculative.length)?'<h3>推测（原文未找到出处）</h3>'+sm.speculative.map(function(x){return '<div class="debtRow"><span class="tag" style="color:var(--white)">推测</span><div class="grow">'+esc(x)+'</div></div>';}).join(''):'')
+    +(lastStashCount?'<p class="muted">已暂存到将来 '+lastStashCount+' 条（见「碎片」页暂存库），不进今日计划</p>':'')
     +'<div class="btn-row"><button class="btn btn-green" id="schedConfirm1">理解正确，开始排程</button><button class="btn btn-ghost" id="schedEdit1">修改</button></div></div>';
 }
 async function stage1Understand(){
@@ -1518,8 +1919,8 @@ async function stage1Understand(){
   }
   toast('正在理解你的安排…',60000);
   const base=(s.apiBase||'https://api.moonshot.cn/v1').replace(/\/+$/,'');
-  const prompt='请从以下输入中解析【理解摘要】，只输出 JSON：{"exams":[{"subject":"科目","date":"YYYY-MM-DD","source":"原文引用"}],"dueGroups":[{"due":"明天/周三/…","subjects":["科目"],"source":"原文引用"}],"tasks":[{"subject":"科目","text":"任务原文","source":"原文引用"}],"speculative":["推测内容"]}。'
-    +'规则：source 必须是输入中的原文引用；找不到出处的项放入 speculative。不存在内置考试表，已有考试记录全部来自用户——用户说哪天考就信哪天，禁止以"内置考试无该科目"等理由产生推测。'
+  const prompt='请从以下输入中解析【理解摘要】，只输出 JSON：{"exams":[{"subject":"科目","date":"YYYY-MM-DD","source":"原文引用"}],"dueGroups":[{"due":"明天/周三/…","subjects":["科目"],"source":"原文引用"}],"tasks":[{"subject":"科目","text":"任务原文","date":"YYYY-MM-DD 执行日期（今天的事写 今天）","source":"原文引用"}],"speculative":["推测内容"]}。'
+    +'规则：source 必须是输入中的原文引用；找不到出处的项放入 speculative。每条任务必须给出执行日期——把"明天/周三/下周五"等相对日期换算成 YYYY-MM-DD；今天的事 date 写"今天"；执行日期不是今天的任务照常列入 tasks 并填真实日期，由系统在其后自动移入暂存库。不存在内置考试表，已有考试记录全部来自用户——用户说哪天考就信哪天，禁止以"内置考试无该科目"等理由产生推测。'
     +'输入：用户任务：'+JSON.stringify(c.tasks)+'；用户补充说明：'+(note||'（无）')+'；已有考试记录：'+JSON.stringify(c.exams)+'；固定任务池：'+JSON.stringify(c.pool)+'；未清欠账：'+JSON.stringify(c.debts)+'；未来 14 天假期：'+(holidaysNext14().join('；')||'无')+'。今天是 '+todayISO()+'（'+DN[new Date().getDay()]+'）。';
   try{
     const resp=await fetch(base+'/chat/completions',{method:'POST',
@@ -1534,22 +1935,104 @@ async function stage1Understand(){
     pendingSummary={
       exams:(o.exams||[]).map(function(e){return{subject:String(e.subject||''),date:String(e.date||''),source:String(e.source||'')};}),
       dueGroups:(o.dueGroups||[]).map(function(g){return{due:String(g.due||''),subjects:(g.subjects||[]).map(String),source:String(g.source||'')};}),
-      tasks:(o.tasks||[]).map(function(t){return{subject:String(t.subject||''),text:String(t.text||''),source:String(t.source||'')};}),
+      tasks:(o.tasks||[]).map(function(t){return{subject:String(t.subject||''),text:String(t.text||''),source:String(t.source||''),date:String(t.date||'')};}),
       speculative:(o.speculative||[]).map(String)
     };
+    /* 未来任务暂存：执行日期非今天 → lsa_futurebox，不进今日计划 */
+    lastStashCount=0;
+    const fb=store.get('futurebox',{});
+    pendingSummary.tasks=pendingSummary.tasks.filter(function(t){
+      const d=(t.date||'').trim();
+      if(d&&d!==todayISO()&&/^\d{4}-\d{2}-\d{2}$/.test(d)){
+        const arr=fb[d]||(fb[d]=[]);
+        if(!arr.some(function(x){return x.text===t.text;})){arr.push({id:Date.now()+arr.length,text:t.text,src:'用户输入'});lastStashCount++;}
+        return false;
+      }
+      return true;
+    });
+    store.set('futurebox',fb);
     schedStage='summary';
     const bi=buildChanges(note||'');
     pendingIntents=(bi.cls!=='add'&&bi.cls!=='query')?bi.changes:[];
+    if(/删除|取消|不要|去掉/.test(note||'')&&/22:00|红线|睡前阅读|office 锁死|office 锁定/.test(note||'')){
+      pendingIntents=[{type:'none',label:'已拒绝：核心锚点（22:00 红线/睡前阅读/office 锁死）不可删除'}];
+    }
   }catch(err){
     toast('理解失败：'+err.message);
   }
   refreshTaskCards();
 }
 function schedEdit1(){
-  const t=prompt('补充或纠正你的安排（例：明天考历史，作业周三交）',schedNote());
-  if(t===null)return;
-  setSchedNote(t.trim());
-  stage1Understand();
+  const ids=['diHomework','diReview','diOther'];
+  for(const id of ids){
+    const el=document.getElementById(id);
+    if(el&&el.value.trim()){el.focus();el.scrollIntoView({behavior:'smooth',block:'center'});return;}
+  }
+  const first=document.getElementById('diHomework');
+  if(first)first.focus();
+}
+function fetchTimeout(promise,ms){
+  return Promise.race([promise,new Promise(function(res,rej){setTimeout(function(){rej(new Error('TIMEOUT'));},ms);})]);
+}
+function localPlan(){
+  const out=[];const seen={};
+  function add(text,quad,minutes,start,doneFrom){
+    if(!text||seen[text])return null;seen[text]=1;
+    const it={task:text,quad:quad,minutes:minutes,steps:['开始','收尾'],doneFrom:doneFrom||null,start:start||'',end:''};
+    out.push(it);
+    return it;
+  }
+  const fq=getFreq();const rules=getRules();
+  function quotaLeft(k){return !(rules.items[k]&&rules.items[k].track&&fq[k]>=rules.items[k].quota);}
+  /* 固定模块锚点（不算学习时长） */
+  const qt=quizletTime();
+  add('quizlet（15min）','◆',15,qt);
+  if(officeDay())add('office（16:10-17:10）','◆',60,'16:10');
+  else if(!rules.noCommute)add('通勤学习 1 小时','◆',60,'16:10');
+  /* 变更模块 B：学习任务 */
+  const tasks=getTasks().filter(function(t){return !t.done&&!t.cancelled;});
+  const ordered=tasks.slice().sort(function(a,b){
+    const ra=/考|test|‼️|明天交|截止/.test(a.text)?0:(/quiz/.test(a.text)?1:(/作业|worksheet|HW|CW/i.test(a.text)?2:3));
+    const rb=/考|test|‼️|明天交|截止/.test(b.text)?0:(/quiz/.test(b.text)?1:(/作业|worksheet|HW|CW/i.test(b.text)?2:3));
+    return ra-rb;
+  });
+  let cursor=17*60+10;
+  const hard=parseScheduleLines(dayInputs().schedule||'').ok;
+  ordered.forEach(function(t){
+    const k=freqKind(t.text);
+    if(k&&!quotaLeft(k))return;
+    const q=/考|test|‼️|明天交|截止/.test(t.text)?'‼️':(/预习|拓展|兴趣/.test(t.text)?'○':'◆');
+    const it=add(t.text,q,q==='‼️'?60:(q==='○'?20:40),'',t.text);
+    if(!it)return;
+    const h=hard.filter(function(x){return t.text.indexOf(x.task)>=0||x.task.indexOf(t.text)>=0;})[0];
+    if(h){it.start=h.start;it.end=h.end;it.minutes=minOf(h.end)-minOf(h.start);return;}
+    let s=cursor;
+    busyToday().forEach(function(b){
+      const bs=minOf(b.start);const be=minOf(b.end);
+      if(s<be&&s+it.minutes>bs)s=be;
+    });
+    if(s+it.minutes>21*60+30){it.minutes=Math.max(10,21*60+30-s);}
+    it.start=timeOf(s);it.end=timeOf(s+(+it.minutes));
+    cursor=minOf(it.end);
+  });
+  add('休息（45min 自由拆分）','○',45,'');
+  add('睡前阅读','◆',30,'21:30');
+  /* 计算 end */
+  let prev=17*60+10;
+  out.forEach(function(it){
+    if(!it.start)it.start=timeOf(prev);
+    if(minOf(it.start)<prev)it.start=timeOf(prev);
+    if(!it.end||minOf(it.end)<=minOf(it.start))it.end=timeOf(Math.min(22*60,minOf(it.start)+(+it.minutes||30)));
+    prev=minOf(it.end);
+  });
+  const pins=getTasks().filter(function(t){return t.pin||t.text.indexOf('今日考试：')>=0;});
+  pins.forEach(function(t){
+    const it=add(t.text,'‼️',30,'17:10',t.text);
+    if(it){it.end=timeOf(minOf(it.start)+30);}
+  });
+  out.sort(function(a,b){return minOf(a.start)-minOf(b.start);});
+  const r=normalizePlan(out);
+  return r.plan;
 }
 async function stage2Schedule(isRetry){
   const s=aiSettings();
@@ -1569,20 +2052,33 @@ async function stage2Schedule(isRetry){
   }
   const oldTasks=getTasks().map(function(t){return{text:t.text,done:!!t.done};});
   const floor=store.get('reduceToday')===todayISO()?0:(holidayOn(todayISO())?90:180);
+  const hard=parseScheduleLines(dayInputs().schedule||'');
+  const busy=hard.ok;
+  if(busy.length){const bm=store.get('busy',{});bm[todayISO()]=busy;store.set('busy',bm);}
+  const yLeft=yesterdayLeft();
+  const fq=getFreq();const rules=getRules();
+  const fqTxt=Object.keys(rules.items).filter(function(k){return rules.items[k].track;}).map(function(k){return k+' 本周 '+fq[k]+'/'+rules.items[k].quota;}).join('，');
+  const pins=getTasks().filter(function(t){return t.pin||t.text.indexOf('今日考试：')>=0;}).map(function(t){return t.text;});
+  const busyTxt=busy.length?('以下时段被占用，禁止安排任务：'+busy.map(function(b){return b.start+'-'+b.end;}).join('，')+'。'):'';
+  const pinTxt=pins.length?('今日有考试，必须排在计划最前：'+pins.join('、')+'。'):'';
+  const yTxt=((yLeft.debts.length||yLeft.stash.length)?('昨日延续（用户已确认继续）：欠账 '+yLeft.debts.map(function(d){return d.content;}).join('、')+'；暂存 '+yLeft.stash.map(function(x){return x.text;}).join('、')+'。'):'');
+  const fixedMod='【固定模块】（锚点，不算学习时长）：起床 6:20；quizlet 15min 默认 '+quizletTime()+' 开始（用户说"quizlet 改到 X 点"才改）；通勤学习 1 小时；office 16:10-17:10 锁死（今天'+(officeDay()?'有':'无')+' office，无 office 的日子该时段为通勤学习）；membean 15min 时段不固定；睡前阅读 21:30-22:00 固定；22:00 当日红线。quizlet 与 membean 的 15min 可互换。';
+  const layoutRule='【变更模块 A · 休息】每天凑满 45 分钟，由你决定拆成几段、放在哪些时段。【变更模块 B · 学习】总学习时长=（结束学习−开始学习）−45min 休息，在此范围内自由排布固定模块之外的所有 variable subjects。';
   const prompt='你是学习规划师。基于已确认的理解摘要排程，并智能消化旧任务表。'
-    +'理解摘要：'+JSON.stringify(sm)+'；用户补充说明（原文原样使用）：'+(schedNote()||'（无）')+'；固定任务池：'+JSON.stringify(c.pool)+'；近期考试：'+JSON.stringify(c.exams)+'；未清欠账：'+JSON.stringify(c.debts)+'；未来 14 天假期：'+(holidaysNext14().join('；')||'无')+'。今天是 '+todayISO()+'。'
+    +'理解摘要：'+JSON.stringify(sm)+'；用户输入（原文原样使用）：'+(schedNote()||'（无）')+'；variable subjects：'+JSON.stringify(c.pool.concat(c.tasks))+'；近期考试：'+JSON.stringify(c.exams)+'；未清欠账：'+JSON.stringify(c.debts)+'；未来 14 天假期：'+(holidaysNext14().join('；')||'无')+'；每周目标进度：'+fqTxt+'。今天是 '+todayISO()+'。'
     +'旧任务表（含完成状态）：'+JSON.stringify(oldTasks)+'。'
-    +'优先级（从高到低）：0. 用户当次输入——原文原样放入计划（"历史 worksheet"禁止改写为"历史作业"；用户提到的每个科目必须出现在计划里，漏一个视为失败）；1. 三天内固定考试+明天截止的作业；2. 科目权重（文学>经济>历史>语言>数学>生物）；3. 耗时短先；4. 欠账（旧账优先还）。仅当用户未输入新内容时才使用第 1-4 层。'
-    +'少样本示例：【输入】旧表第1位"语言（周五考试）"；用户说"明天考历史"。【正确输出】历史插入第1位（考试更近），语言降到第2位（不是删除，是推理后让位）。【输入】"历史/文学/数学作业明天交；语文/语言/生物这周交；经济下周交"。【正确输出】明天交的三科作业逐项列出并给足今晚时间；这周交的分摊到明后两天；经济排周末——禁止输出笼统的"学校作业"。'
-    +'时段与时长按象限和优先级推理：‼️→整块主时段（如 19:30 Block1 60min）；◆→正常 Block 时段；⏱→午休/通勤等碎片；○→压缩时长或标注"建议取消"。禁止所有任务套用固定模板时段。'
+    +GLOSSARY+GRADE+rulesText()
     +'消化旧表规则：被新计划覆盖的旧任务→合并（输出 doneFrom=旧任务原文，保留其完成状态）；位置需调整的→重排（同样给 doneFrom）；与新计划无关的→保留（给 doneFrom 并放入计划）；禁止无脑清空重建。'
-    +'严格只输出 JSON：{"plan":[{"task":"任务原文","slot":"建议时段","minutes":30,"quad":"‼️","steps":["步骤1","步骤2"],"doneFrom":"旧任务原文或null"}],"changes":{"merged":0,"reordered":0,"kept":0,"new":0}}'
-    +(floor?('总学习时长保底 '+floor+' 分钟，不足请在计划中补足。'):'今日减量/轻松模式，不设最低时长。')
+    +fixedMod+layoutRule
+    +'时间轴硬要求：plan 每项必须给出 start 与 end（HH:MM）；所有窗口按时间顺序首尾相接、互不重叠；睡前阅读固定 21:30-22:00 必须出现；任何任务 end 不得晚于 22:00。不要输出"Block1/Block2"等内部代号，只输出真实时间。'
+    +'严格只输出 JSON：{"plan":[{"task":"任务原文","start":"19:30","end":"20:30","minutes":60,"quad":"‼️","steps":["步骤1","步骤2"],"doneFrom":"旧任务原文或null"}],"changes":{"merged":0,"reordered":0,"kept":0,"new":0},"tradeoffs":[{"task":"任务","level":"○ 或 建议取消","reason":"如 B+ 且非明日死线"}]}'
+    +(floor?('总学习时长保底 '+floor+' 分钟（不含固定模块锚点与休息），不足请在计划中补足。'):'今日减量/轻松模式，不设最低时长。')
+    +busyTxt+pinTxt+yTxt
     +(isRetry?'上次输出遗漏了用户提到的科目，本次必须全部包含。':'');
   try{
-    const resp=await fetch(base+'/chat/completions',{method:'POST',
+    const resp=await fetchTimeout(fetch(base+'/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+s.apiKey},
-      body:JSON.stringify({model:s.model||'kimi-k2-0905-preview',messages:[{role:'user',content:prompt}],temperature:0.4,max_tokens:3000})});
+      body:JSON.stringify({model:s.model||'kimi-k2-0905-preview',messages:[{role:'user',content:prompt}],temperature:0.4,max_tokens:3000})}),15000);
     if(!resp.ok)throw new Error('HTTP '+resp.status);
     const data=await resp.json();
     const txt=(data.choices&&data.choices[0]?data.choices[0].message.content:'');
@@ -1591,18 +2087,42 @@ async function stage2Schedule(isRetry){
     const o=JSON.parse(m[0]);
     const list=Array.isArray(o.plan)?o.plan:[];
     if(!list.length)throw new Error('空结果');
-    pendingPlan=list.slice(0,15).map(function(x){return{task:String(x.task||''),slot:String(x.slot||''),minutes:+x.minutes||0,quad:String(x.quad||'○'),steps:Array.isArray(x.steps)?x.steps.map(String).slice(0,4):[],doneFrom:x.doneFrom?String(x.doneFrom):null};});
+    pendingPlan=list.slice(0,15).map(function(x){return{task:String(x.task||''),slot:String(x.slot||''),start:String(x.start||''),end:String(x.end||''),minutes:+x.minutes||0,quad:String(x.quad||'○'),steps:Array.isArray(x.steps)?x.steps.map(String).slice(0,4):[],doneFrom:x.doneFrom?String(x.doneFrom):null};});
     pendingChanges=o.changes||{merged:0,reordered:0,kept:0,new:0};
+    pendingTradeoffs=Array.isArray(o.tradeoffs)?o.tradeoffs.map(function(x){return{task:String(x.task||''),level:String(x.level||''),reason:String(x.reason||'')};}).slice(0,10):[];
+    /* 本地校验器：时间布局正确性兜底（硬约束钉回/排序推平/红线/合并/上限 8 条） */
+    const norm=normalizePlan(pendingPlan);
+    pendingPlan=norm.plan;
+    norm.trimmed.forEach(function(tk){pendingTradeoffs.push({task:tk,level:'建议取消',reason:'超出每日 8 条上限（本地裁剪）'});});
+    /* 每周目标：当周已满不再排入 */
+    pendingPlan=pendingPlan.filter(function(p){
+      const k=freqKind(p.task);
+      return !(k&&rules.items[k]&&rules.items[k].track&&fq[k]>=rules.items[k].quota);
+    });
+    /* 当天考试置前 */
+    pins.forEach(function(ptext){
+      const i=pendingPlan.findIndex(function(p){return p.task.indexOf(ptext)>=0;});
+      if(i>0){const it=pendingPlan.splice(i,1)[0];pendingPlan.unshift(it);}
+      else if(i<0)pendingPlan.unshift({task:ptext,slot:'17:10-17:40',start:'17:10',end:'17:40',minutes:30,quad:'‼️',steps:['考前浏览','考后复盘'],doneFrom:ptext});
+    });
     if(floor){
-      const total=pendingPlan.reduce(function(a,b){return a+(b.minutes||0);},0);
-      if(total<floor)pendingPlan.push({task:'晚间学习（保底补足）',slot:'20:40 Block2',minutes:floor-total,quad:'◆',steps:['回顾今日计划','补足剩余学习时长'],doneFrom:null});
+      const total=pendingPlan.reduce(function(a,b){return a+(+b.minutes||0);},0);
+      if(total<floor)pendingPlan.push({task:'晚间学习（保底补足）',slot:'',start:'',end:'',minutes:floor-total,quad:'◆',steps:['回顾今日计划','补足剩余学习时长'],doneFrom:null});
     }
     const missing=userSubjects().filter(function(subj){return !pendingPlan.some(function(p){return p.task.indexOf(subj)>=0;});});
     if(missing.length&&!isRetry){toast('排程遗漏科目：'+missing.join('、')+'，重新生成…',5000);return stage2Schedule(true);}
     if(missing.length){toast('排程仍遗漏科目：'+missing.join('、')+'，请检查输入');return;}
     schedStage='plan';
   }catch(err){
-    toast('排程失败：'+err.message);
+    if(err.message==='TIMEOUT'){
+      pendingPlan=localPlan();
+      pendingChanges={merged:0,reordered:0,kept:oldTasks.length,new:pendingPlan.length};
+      pendingTradeoffs=[];
+      schedStage='plan';
+      toast('AI 无响应，已用本地规则排程');
+    }else{
+      toast('排程失败：'+err.message);
+    }
   }
   refreshTaskCards();
 }
@@ -1618,9 +2138,10 @@ function confirmPlan(){
     return base;
   });
   saveTasks(newTasks);
+  newTasks.forEach(function(t){touchSubjectFromText(t.text);});
   store.set('today_plan',{date:todayISO(),status:'active',items:pendingPlan.map(function(x){return Object.assign({},x);})});
   const ch=pendingChanges||{merged:0,reordered:0,kept:0,new:0};
-  pendingPlan=null;pendingChanges=null;pendingSummary=null;schedStage='idle';
+  pendingPlan=null;pendingChanges=null;pendingSummary=null;pendingTradeoffs=[];schedStage='idle';
   refreshTaskCards();
   toast('已确认：合并 '+ch.merged+' 条、重排 '+ch.reordered+' 条、保留 '+ch.kept+' 条、新增 '+ch.new+' 条');
 }
@@ -1735,6 +2256,53 @@ function weeklyAutoCheck(){
   openWeeklyModal();
 }
 /* ---- 月度回顾自动汇总 ---- */
+async function genDayComment(){
+  const s=aiSettings();
+  if(!(s.apiKey&&s.apiKey.trim())){toast('未配置 Key，跳过评语');return;}
+  const rows=tableRowsNow();
+  const r0=dayRate(todayISO());
+  try{
+    const base=(s.apiBase||'https://api.moonshot.cn/v1').replace(/\/+$/,'');
+    const prompt='根据今日任务完成情况生成一句当日评语（鼓励或指出问题，30 字内）：'+JSON.stringify(rows)+'，当日完成率 '+(r0?Math.round(r0.done/r0.total*100)+'%':'—');
+    const resp=await fetch(base+'/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+s.apiKey},
+      body:JSON.stringify({model:s.model||'kimi-k2-0905-preview',messages:[{role:'user',content:prompt}],temperature:0.7,max_tokens:120})});
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    const data=await resp.json();
+    const txt=((data.choices&&data.choices[0]?data.choices[0].message.content:'')||'').trim();
+    if(!txt)throw new Error('空回复');
+    const dc=store.get('daycomment',{});dc[todayISO()]=txt;store.set('daycomment',dc);
+    const el=document.getElementById('dayComment');
+    if(el)el.textContent=txt;
+  }catch(err){
+    toast('评语生成失败：'+err.message);
+  }
+}
+function monthWeekAnalysis(){
+  const wt=store.get('weektables',{});
+  const keys=Object.keys(wt).sort().slice(-4);
+  const days=[];
+  keys.forEach(function(k){(wt[k]||[]).forEach(function(d){days.push(d);});});
+  if(!days.length)return null;
+  const rates=days.map(function(d){return parseInt(d.rate,10)||0;});
+  const wd={};const subj={};
+  days.forEach(function(d){
+    const w=new Date(d.date+'T00:00:00').getDay();
+    (wd[w]=wd[w]||[]).push(parseInt(d.rate,10)||0);
+    (d.rows||[]).forEach(function(r){
+      if(r.st==='已取消')return;
+      const s=subjectOf(r.task);
+      const pm=/进度 (\d+)%/.exec(r.st);
+      const wgt=r.st==='完成'?1:(pm?(+pm[1])/100:0);
+      subj[s]=subj[s]||{done:0,n:0};subj[s].n++;subj[s].done+=wgt;
+    });
+  });
+  let lowD=null,lowV=101;
+  Object.keys(wd).forEach(function(k){const avg=wd[k].reduce(function(a,b){return a+b;},0)/wd[k].length;if(avg<lowV){lowV=avg;lowD=k;}});
+  let lowS='—',lowSV=101;
+  Object.keys(subj).forEach(function(k){if(!subj[k].n)return;const r=Math.round(subj[k].done/subj[k].n*100);if(r<lowSV){lowSV=r;lowS=k;}});
+  return{trend:rates.join('%→')+'%',lowDay:DN[lowD]||'—',lowDayRate:Math.round(lowV),lowSubj:lowS,lowSubjRate:lowSV,days:days.length};
+}
 function monthlyAuto(){
   const now=new Date();const mkey=now.getFullYear()+'-'+pad(now.getMonth()+1);
   const entries=store.get('weekly',[]).filter(function(e){const d=new Date(e.ts);return d.getFullYear()+'-'+pad(d.getMonth()+1)===mkey;});
@@ -1749,8 +2317,32 @@ function monthlyAuto(){
   let weak='—',wv=-1;Object.keys(freq).forEach(function(k){if(freq[k]>wv){wv=freq[k];weak=k;}});
   const avg=scores.length?(scores.reduce(function(x,y){return x+y.v;},0)/scores.length).toFixed(1):'—';
   const trend=selfs.length>1?(selfs[selfs.length-1]>selfs[0]?'上升':(selfs[selfs.length-1]<selfs[0]?'下降':'持平')):'—';
-  return {month:mkey,n:entries.length,avg:avg,weakest:weak,trend:trend,
-    note:'本月周报 '+entries.length+' 条 · 登记均分 '+avg+' · 最弱科出现频次最高：'+weak+' · 自评趋势：'+trend+(notes.length?' · 最近最卡知识点：'+notes[notes.length-1]:'')};
+  const wa=monthWeekAnalysis();
+  const waTxt=wa?('｜近4周完成率趋势：'+wa.trend+'｜完成率最低：'+wa.lowDay+'（'+wa.lowDayRate+'%）｜最弱科目：'+wa.lowSubj+'（'+wa.lowSubjRate+'%）'):'';
+  const note='本月周报 '+entries.length+' 条 · 登记均分 '+avg+' · 最弱科出现频次最高：'+weak+' · 自评趋势：'+trend+(notes.length?' · 最近最卡知识点：'+notes[notes.length-1]:'')+waTxt;
+  /* AI 三句诊断与下月建议（无 Key 跳过，不阻塞） */
+  if(wa){
+    const s=aiSettings();
+    if(s.apiKey&&s.apiKey.trim()){
+      const base=(s.apiBase||'https://api.moonshot.cn/v1').replace(/\/+$/,'');
+      fetch(base+'/chat/completions',{method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+s.apiKey},
+        body:JSON.stringify({model:s.model||'kimi-k2-0905-preview',
+          messages:[{role:'user',content:'根据近 4 周学习数据给三句诊断与下月建议：'+JSON.stringify(wa)}],
+          temperature:0.5,max_tokens:400})})
+        .then(function(r){return r.ok?r.json():null;})
+        .then(function(data){
+          if(!data||!data.choices||!data.choices[0])return;
+          const txt=(data.choices[0].message.content||'').trim();
+          if(!txt)return;
+          const reviews=store.get('reviews',[]);
+          const hit=reviews.filter(function(r){return r.month===mkey&&r.auto;})[0];
+          if(hit){hit.note=(hit.note||'')+'\nAI 诊断：'+txt;store.set('reviews',reviews);}
+        })
+        .catch(function(){});
+    }
+  }
+  return {month:mkey,n:entries.length,avg:avg,weakest:weak,trend:trend,note:note};
 }
 /* ================= 阅读进度 ================= */
 function getReading(){return store.get('reading',{title:'《人鼠之间》',chapters:['第 1 章','第 2 章','第 3 章','第 4 章','第 5 章','第 6 章'].map(t=>({t:t,read:false}))});}
@@ -1765,7 +2357,23 @@ function renderRead(){
     +'<div class="card"><h3>整书替换</h3><p class="muted">粘贴新的章节或文章标题列表（一行一个），确认后替换当前书目，已读进度将重置：</p>'
     +'<textarea id="replaceBox" style="min-height:140px" placeholder="第 1 章&#10;第 2 章&#10;……"></textarea>'
     +'<div class="btn-row"><button class="btn btn-yellow" id="readReplace">替换书目</button></div></div>'
-    +commuteCardHtml();
+    +commuteCardHtml()
+    +futureboxHtml();
+}
+let fbOpen=false;
+function futureboxHtml(){
+  const fb=store.get('futurebox',{});
+  const dates=Object.keys(fb).filter(function(d){return fb[d]&&fb[d].length;}).sort();
+  const n=dates.reduce(function(a,d){return a+fb[d].length;},0);
+  const inner=dates.map(function(d){
+    return '<h4 style="margin:8px 0 4px">'+esc(dateCN(d))+'（'+d+'）</h4>'
+      +fb[d].map(function(x){
+        return '<div class="debtRow"><div class="grow">'+esc(x.text)+'</div><button class="btn btn-sm btn-red fbDel" data-date="'+d+'" data-id="'+x.id+'">删除</button></div>';
+      }).join('');
+  }).join('')||'<p class="muted">暂无暂存任务</p>';
+  return '<div class="card" style="padding:6px 10px;margin:12px 0">'
+    +'<button class="accHd" id="fbToggle">暂存库（'+n+' 条）'+(fbOpen?' ▲':' ▼')+'</button>'
+    +'<div class="accBody'+(fbOpen?' open':'')+'">'+inner+'</div></div>';
 }
 function commuteCardHtml(){
   const day=new Date().getDay();
@@ -2105,10 +2713,27 @@ document.addEventListener('click',function(e){
   if(fsk){toggleFixedSkip(fsk.dataset.t);return;}
   const pf=e.target.closest('.planFocus');
   if(pf){startTimer(Math.max(1,+pf.dataset.min||25),pf.dataset.label,null);return;}
+  const qb=e.target.closest('.qbStart');
+  if(qb){
+    const t=getTasks();const i=+qb.dataset.i;
+    if(t[i])startTimer(15,t[i].text,'task:'+t[i].id);
+    return;
+  }
   if(e.target.closest('#planConfirm')){confirmPlan();return;}
   if(e.target.closest('#planReplan')){stage2Schedule(false);return;}
   if(e.target.closest('#reduceBtn')){reduceTodayTasks();return;}
   if(e.target.closest('#wkOpen')){openWeeklyModal();return;}
+  if(e.target.closest('#dayCommentBtn')){genDayComment();return;}
+  if(e.target.closest('#fbToggle')){fbOpen=!fbOpen;renderRead();return;}
+  const fbd=e.target.closest('.fbDel');
+  if(fbd){
+    const fb=store.get('futurebox',{});
+    const arr=fb[fbd.dataset.date]||[];
+    fb[fbd.dataset.date]=arr.filter(function(x){return String(x.id)!==String(fbd.dataset.id);});
+    store.set('futurebox',fb);
+    renderRead();
+    return;
+  }
   if(e.target.closest('#fiEdit')){fixedEdit=true;renderCheckin();return;}
   if(e.target.closest('#fiDone')){fixedEdit=false;renderCheckin();return;}
   const fid=e.target.closest('.fiDel');
@@ -2160,7 +2785,20 @@ document.addEventListener('click',function(e){
     store.set('debts',arr);toast('已记下这笔账，周六记得补');renderDebt();return;
   }
   const dd=e.target.closest('.debtDone');
-  if(dd){const arr=store.get('debts',[]);const d=arr.find(x=>x.id===+dd.dataset.id);if(d){d.done=true;store.set('debts',arr);renderDebt();toast('很好，这笔账清了');}return;}
+  if(dd){
+    const arr=store.get('debts',[]);
+    const d=arr.find(x=>x.id===+dd.dataset.id);
+    if(d){
+      d.done=true;store.set('debts',arr);
+      /* 欠账联动：移除任务池中来源为该欠账的任务 */
+      const base=d.content.replace(/^任务未清：/,'').replace(/（原定：[^）]*）/,'');
+      const before=getTasks().length;
+      const kept=getTasks().filter(function(t){return !(t.src==='欠账转化'&&t.text.replace(/（原定：[^）]*）/,'')===base);});
+      if(kept.length!==before){saveTasks(kept);refreshTaskCards();}
+      renderDebt();toast('很好，这笔账清了');
+    }
+    return;
+  }
   const dl=e.target.closest('.debtDel');
   if(dl){
     if(!confirm('确定删除这条欠账记录？'))return;
@@ -2182,10 +2820,23 @@ document.addEventListener('click',function(e){
 });
 document.addEventListener('change',function(e){
   if(e.target.id==='importFile'){importData(e.target);return;}
-  if(e.target.closest('.taskDoneChk')){const t=getTasks();const i=+e.target.dataset.i;if(t[i]){t[i].done=e.target.checked;saveTasks(t);refreshTaskCards();}return;}
-  if(e.target.closest('.ctChk')){const m=store.get('checkin_tasks',{});const id=e.target.dataset.id;if(e.target.checked)m[id]=true;else delete m[id];store.set('checkin_tasks',m);return;}
+  if(e.target.closest('.taskDoneChk')){const t=getTasks();const i=+e.target.dataset.i;if(t[i]){t[i].done=e.target.checked;saveTasks(t);refreshTaskCards();if(currentTab==='sec-checkin')renderCheckin();}return;}
+  if(e.target.closest('.ctChk')){
+    const t=getTasks();
+    const item=t.find(function(x){return String(x.id)===String(e.target.dataset.id);});
+    if(item){item.done=e.target.checked;saveTasks(t);refreshTaskCards();if(currentTab==='sec-checkin')renderCheckin();}
+    return;
+  }
   if(e.target.closest('.fiName')){const arr=getFixedItems();const i=+e.target.dataset.i;const v=e.target.value.trim();if(v&&arr[i]!==undefined){arr[i]=v;store.set('fixed_items',arr);}return;}
-  if(e.target.closest('.stepChk')){const t=getTasks();const i=+e.target.dataset.i;const j=+e.target.dataset.j;if(t[i]&&t[i].steps&&t[i].steps[j]){t[i].steps[j].done=e.target.checked;saveTasks(t);refreshTaskCards();}return;}
+  if(e.target.closest('.stepChk')){
+    const t=getTasks();const i=+e.target.dataset.i;const j=+e.target.dataset.j;
+    if(t[i]&&t[i].steps&&t[i].steps[j]){
+      t[i].steps[j].done=e.target.checked;
+      if(t[i].steps.every(function(s){return s.done;}))t[i].done=true;
+      saveTasks(t);refreshTaskCards();
+    }
+    return;
+  }
   const tc=e.target.closest('.taskChk');
   if(tc){
     const all=getCheckins();const d=all[todayISO()]||{};
@@ -2202,9 +2853,10 @@ document.addEventListener('change',function(e){
 
 /* ================= 启动 ================= */
 buildNav();
-if(dayCut()){
+const dc0=dayCut();
+if(dc0.changed){
   const d0=new Date();
-  toast('已切换到 '+(d0.getMonth()+1)+'月'+d0.getDate()+'日');
+  toast('已切换到 '+(d0.getMonth()+1)+'月'+d0.getDate()+'日'+dc0.extra);
 }
 const initTab=(location.hash||'#sec-home').slice(1);
 switchTab(document.getElementById(initTab)?initTab:'sec-home',false);
@@ -2213,9 +2865,10 @@ checkMonthlyPrompt();
 weeklyAutoCheck();
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden)return;
-  if(dayCut()){
+  const dc1=dayCut();
+  if(dc1.changed){
     const d1=new Date();
-    toast('已切换到 '+(d1.getMonth()+1)+'月'+d1.getDate()+'日');
+    toast('已切换到 '+(d1.getMonth()+1)+'月'+d1.getDate()+'日'+dc1.extra);
     if(RENDERERS[currentTab])RENDERERS[currentTab]();
   }
 });
